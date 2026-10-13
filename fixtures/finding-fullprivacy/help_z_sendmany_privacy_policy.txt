@@ -1,0 +1,22 @@
+privacy_policy` (string, optional, default=`"FullPrivacy"`) Policy for what
+  information leakage is acceptable. One of the following strings:
+  - `"FullPrivacy"`: Only allow fully-shielded transactions (involving a single
+    shielded value pool).
+  - `"AllowRevealedAmounts"`: Allow funds to cross between shielded value pools,
+    revealing the amount that crosses pools.
+  - `"AllowRevealedRecipients"`: Allow transparent recipients. This also implies
+    revealing information described under `"AllowRevealedAmounts"`.
+  - `"AllowRevealedSenders"`: Allow transparent funds to be spent, revealing the
+    sending addresses and amounts. This implies revealing information described
+    under `"AllowRevealedAmounts"`.
+  - `"AllowFullyTransparent"`: Allow transaction to both spend transparent funds
+    and have transparent recipients. This implies revealing information described
+    under `"AllowRevealedSenders"` and `"AllowRevealedRecipients"`.
+  - `"AllowLinkingAccountAddresses"`: Allow selecting transparent coins from the
+    full account, rather than just the funds sent to the transparent receiver in
+    the provided Unified Address. This implies revealing information described
+    under `"AllowRevealedSenders"`.
+  - `"NoPrivacy"`: Allow the transaction to reveal any information necessary to
+    create it. This implies revealing information described under
+    `"AllowFullyTransparent"` and `"AllowLinkingAccountAddresses"`.
+

@@ -1,0 +1,29 @@
+{
+    "jsonrpc": "2.0",
+    "result": [
+        {
+            "id": "opid-4543e88d-2e02-4057-85bb-7d9aeac8f89a",
+            "method": "z_sendmany",
+            "params": {
+                "fromaddress": "uregtest1lucj52vvr5ct04t6uztsvfcqe00reu226092s9zzjkap57cj0zar3lgwygj3t8vhmrx89y3zxsn94q0ptd30daxrx4zc3aypguqnpyca",
+                "amounts": [
+                    {
+                        "address": "zregtestsapling1v5us5kpma4cxrz7x0d5qmaxnevtxwjgvhy4fjv3mlm33ja4vdl562qy2wj4pc23m4xlu2ngl9y5",
+                        "amount": 0.1
+                    }
+                ],
+                "minconf": 1
+            },
+            "status": "success",
+            "creation_time": 1791928915,
+            "result": {
+                "txid": "9e533da10b88b21e4920bae561c04838f14ee3dcc746b5dcf0dd1d7dfe59e240",
+                "txids": [
+                    "9e533da10b88b21e4920bae561c04838f14ee3dcc746b5dcf0dd1d7dfe59e240"
+                ]
+            },
+            "execution_secs": 4
+        }
+    ],
+    "id": 1
+}

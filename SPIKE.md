@@ -48,13 +48,10 @@ Trimmed RPC outputs are in `docs/spike-outputs/`. `saplingtx.json` and `shieldtx
 - `getblock [hash,1]` gives `valuePools[]` with `{id: transparent|sprout|sapling|orchard|lockbox|ironwood, chainValueZat, valueDeltaZat}` plus `trees.ironwood.size`, `finalsaplingroot` and `finalorchardroot`. `getblockchaininfo.valuePools` has the same shape without the deltas.
 - `decoderawtransaction` exists on Zebra as an alternative for mempool txs.
 
-Suggested C3: `len(vin)==len(vout)==0` and `vjoinsplit==[]`. Suggested C4 (pool): exactly one of sapling, orchard or ironwood is non-empty and matches the expected pool. Also require all other pools' valueBalance to be 0, which catches cross-pool amount reveals.
+Suggested C3: `len(vin)==len(vout)==0` and `vjoinsplit==[]`. Suggested C4 (pool): exactly one of sapling, orchard or ironwood is non-empty and matches the expected pool. Also require all other pools' valueBalance to be 0.
 
-## Notable finding: FullPrivacy allowed a cross-pool send
-`z_sendmany` from the sender's orchard-only UA (funds in ironwood) **to the recipient's Sapling receiver** with `"FullPrivacy"` **succeeded** (tx `1fa01b3b...`).
-The result has 2 Sapling outputs (`valueBalanceZat=-10000000`) and 2 ironwood actions (`valueBalanceZat=+10020000`), so **the 0.1 ZEC moved between pools is publicly revealed**.
-Zallet's help text says FullPrivacy means "single shielded value pool". This is exactly the kind of regression ZCanary should catch. It needs re-checking and possibly an upstream report.
-A transparent recipient under FullPrivacy is rejected synchronously (error -8) as expected.
+## Cross-pool observation
+See `docs/finding-fullprivacy.md` (UNCONFIRMED research notes).
 
 ## z_listunifiedreceivers
 It works. Zebra and Zallet both implement it, and the router answers with Zebra's version.

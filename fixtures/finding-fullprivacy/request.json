@@ -1,0 +1,17 @@
+{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "z_sendmany",
+    "params": [
+        "uregtest1lucj52vvr5ct04t6uztsvfcqe00reu226092s9zzjkap57cj0zar3lgwygj3t8vhmrx89y3zxsn94q0ptd30daxrx4zc3aypguqnpyca",
+        [
+            {
+                "address": "zregtestsapling1v5us5kpma4cxrz7x0d5qmaxnevtxwjgvhy4fjv3mlm33ja4vdl562qy2wj4pc23m4xlu2ngl9y5",
+                "amount": 0.1
+            }
+        ],
+        1,
+        null,
+        "FullPrivacy"
+    ]
+}
