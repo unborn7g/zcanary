@@ -1,0 +1,47 @@
+{
+ "jsonrpc": "2.0",
+ "id": 1,
+ "result": {
+  "hash": "0a9c08f1c0e6312144832f9d8f554a4b038f7641e64c92f0791a452a707c356b",
+  "confirmations": 1,
+  "size": 20264,
+  "height": 104,
+  "version": 4,
+  "merkleroot": "050cad84984eaaf79d6b47a45a03897f9ebe3dff6d03c1a3ca89d023432c4acd",
+  "blockcommitments": "2f8405b42e0408abafbcc70d45563015f1adea21240e7f382aaa685cb48e2ae3",
+  "finalsaplingroot": "3e49b5f954aa9d3545bc6c37744661eea48d7c34e3000d82b7f0010c30f4c2fb",
+  "finalorchardroot": "ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f",
+  "nTx": 2,
+  "tx": [
+   "6878342521459fa457a61c76d307337cc2a54d8a08e3f4167618c35a1aa5243c",
+   "...(2 total)"
+  ],
+  "time": 1296688622,
+  "nonce": "0000000000000000000000000000000000000000000000000000000000000000",
+  "solution": "0000000000000000000000000000000000000000...(2688 chars)",
+  "bits": "200f0f0f",
+  "difficulty": 1.0,
+  "chainSupply": {
+   "chainValue": 650.0,
+   "chainValueZat": 65000000000,
+   "monitored": true
+  },
+  "valuePools": [
+   {
+    "id": "transparent",
+    "chainValue": 643.75025,
+    "chainValueZat": 64375025000,
+    "monitored": true,
+    "valueDelta": 6.25025,
+    "valueDeltaZat": 625025000
+   },
+   "...(6 total)"
+  ],
+  "trees": {
+   "ironwood": {
+    "size": 6
+   }
+  },
+  "previousblockhash": "d5416aaefc7d5a774b4bbc5c8784afca8200869c4e3dc34b46d2b4e3b8b7a2bb"
+ }
+}

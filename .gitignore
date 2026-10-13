@@ -1,0 +1,14 @@
+# upstream checkout (cloned + pinned by scripts/spike.sh)
+z3/
+# raw run artifacts (may contain wallet data / addresses)
+out/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.*
+*.egg-info/
+dist/
+build/
+.pytest_cache/

@@ -1,0 +1,63 @@
+{
+ "jsonrpc": "2.0",
+ "id": 1,
+ "result": {
+  "in_active_chain": false,
+  "hex": "0600008098b684d85b16a5370000000095000000...(22268 chars)",
+  "vin": [],
+  "vout": [],
+  "vShieldedSpend": [],
+  "vShieldedOutput": [
+   {
+    "cv": "8e3c94431336f0f9037b157bf7353d73e0d18a739c202e83a420869f8f5d065d",
+    "cmu": "65a6900c77214717332d189d8a706d079263f161796b882c40945372bf7dc86e",
+    "ephemeralKey": "0dfc8b3ce038c645c19ca1a591dc577cfb28010ffffc21d497cf2f96cf714580",
+    "encCiphertext": "5aca35f44f1bf59bbb13be8a885e984b48aa71f0...(1160 chars)",
+    "outCiphertext": "d6f3fc06e5a90c23636fd9e777ed00098e34d8bb...(160 chars)",
+    "proof": "94cc26a46a126845e4ef0b4558cb7b577d37d524...(384 chars)"
+   },
+   "...(2 total)"
+  ],
+  "vjoinsplit": [],
+  "bindingSig": "3c85b3f443a77c900839f32f561eec4787deb693...(128 chars)",
+  "orchard": {
+   "actions": [],
+   "valueBalance": 0.0,
+   "valueBalanceZat": 0
+  },
+  "ironwood": {
+   "actions": [
+    {
+     "cv": "bce69548bc65ac4f6c0e531f20765df61f904d1d8542fad6688c40f376eba53b",
+     "nullifier": "fb5c98add17ab2a32e6ea8945ea1b47466ecd462c787d9e7827f4fc43a077b27",
+     "rk": "6917fe1d8414ae533e7f143330d19bd806fc6b9e8128dd5e7ddfbe42faeabebe",
+     "cmx": "6260b744d730aba5d26b5e8ffde16a879705dd3c78dca797b5103b7fee922836",
+     "ephemeralKey": "279220a176edfcb8e69c72e464ce3582fc95b614e841364f7652eeb42b223aa3",
+     "encCiphertext": "103ef92cc3d7a96e1ebcf3b4d893e2bfe241e1e9...(1160 chars)",
+     "spendAuthSig": "449d816fa16ac9030968bd088d954c25c5fb0c75...(128 chars)",
+     "outCiphertext": "9d9cc04a857f101e9140fc7b5099d88fc5589667...(160 chars)"
+    },
+    "...(2 total)"
+   ],
+   "valueBalance": 0.1002,
+   "valueBalanceZat": 10020000,
+   "flags": {
+    "enableOutputs": true,
+    "enableSpends": true
+   },
+   "anchor": "24e85730b5738da77f4934be56bb78ddd2d183b33a2b57343d37604804f1f105",
+   "proof": "9beb0dd2013d2a4a3c03dd8f9c0a587df1479c6a...(14528 chars)",
+   "bindingSig": "9b2b89af4779e69e6f7143b13ee73bf3c357d2b6...(128 chars)"
+  },
+  "valueBalance": -0.1,
+  "valueBalanceZat": -10000000,
+  "size": 11134,
+  "txid": "1fa01b3b6effd5e13da4bc5b862ee1953fe364d5bd5d99741dc1cb1f418b7581",
+  "authdigest": "9a2d0e671df9d2d0cb6a1fc1349811ef4385c13470c4a033c0f90dcc5c3c978b",
+  "overwintered": true,
+  "version": 6,
+  "versiongroupid": "d884b698",
+  "locktime": 0,
+  "expiryheight": 149
+ }
+}

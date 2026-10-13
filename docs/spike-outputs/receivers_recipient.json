@@ -1,0 +1,9 @@
+{
+ "jsonrpc": "2.0",
+ "id": 1,
+ "result": {
+  "orchard": "uregtest1mf6lkdssgggm6vx08fjzp94nvds645u...(113 chars)",
+  "sapling": "zregtestsapling1s42cknpfza0lpfnttvt0gncv...(91 chars)",
+  "p2pkh": "tmYcYBxJbj8sCDpg8CC4BTEFEub5ue2jE7e"
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "jsonrpc": "2.0",
+ "result": {
+  "pools": {
+   "ironwood": {
+    "valueZat": 50000000
+   }
+  },
+  "minimum_confirmations": 1
+ },
+ "id": 1
+}

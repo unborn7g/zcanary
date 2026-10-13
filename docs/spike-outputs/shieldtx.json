@@ -1,0 +1,67 @@
+{
+ "jsonrpc": "2.0",
+ "id": 1,
+ "result": {
+  "in_active_chain": true,
+  "hex": "0600008098b684d85b16a5370000000092000000...(18628 chars)",
+  "height": 106,
+  "confirmations": 3,
+  "vin": [
+   {
+    "txid": "94765a029dc78440ca0562687bdb979cb9ab62afd444c88d74ba932759c1b539",
+    "vout": 0,
+    "scriptSig": {
+     "asm": "3045022100f44b0fa184bfa4ebfefc302ed1fe7a...(214 chars)",
+     "hex": "483045022100f44b0fa184bfa4ebfefc302ed1fe...(214 chars)"
+    },
+    "sequence": 4294967295
+   }
+  ],
+  "vout": [],
+  "vShieldedSpend": [],
+  "vShieldedOutput": [],
+  "vjoinsplit": [],
+  "orchard": {
+   "actions": [],
+   "valueBalance": 0.0,
+   "valueBalanceZat": 0
+  },
+  "ironwood": {
+   "actions": [
+    {
+     "cv": "e064b196257664c25d75017fdfd515239cda043b1196d8e009a141c47f17caba",
+     "nullifier": "b4089f5ce24e09d70710be8162ca0e84b004bb5f4440ac27ab994b8e9b53be3d",
+     "rk": "8f1fe5d7829dd2c4f1a48ee6bc7772fb33b0bd8f9ac357bab0b3460998702628",
+     "cmx": "b9e83760fbdc4ca2883503360d732dbc912c0baca07a739f4f1bde8cb1e15609",
+     "ephemeralKey": "719c60f2d21bed6a898984320d14fc36b395d4943aafee0b41e7599099111207",
+     "encCiphertext": "823eac751cd750696904e2c709a1ca42413a4762...(1160 chars)",
+     "spendAuthSig": "ca4e45a1a5a544cf083e9428fdc2506e2ff10f7e...(128 chars)",
+     "outCiphertext": "837fbc9c82b15be39521e8c033281469042cb883...(160 chars)"
+    },
+    "...(2 total)"
+   ],
+   "valueBalance": -6.24985,
+   "valueBalanceZat": -624985000,
+   "flags": {
+    "enableOutputs": true,
+    "enableSpends": true
+   },
+   "anchor": "80fe571e2addfe5aecd8d5b7b8757f4bc73b4991148e5f93da19ef9e44206437",
+   "proof": "4496060a535afada3111e1fbd72a64e5473e0fe5...(14528 chars)",
+   "bindingSig": "8f14028f17882432ed5460ce498509a230bc3294...(128 chars)"
+  },
+  "valueBalance": 0.0,
+  "valueBalanceZat": 0,
+  "size": 9314,
+  "time": 1296688622,
+  "txid": "44fbc3b70f98c5a482967f87fc93a56caab2c52a000f1ced2326394fbab5e53d",
+  "authdigest": "48b66f7687b5f555af6c4e41362aaa1bed44b04f7fbccf26371b8e814ab43d57",
+  "overwintered": true,
+  "version": 6,
+  "versiongroupid": "d884b698",
+  "locktime": 0,
+  "expiryheight": 146,
+  "blockhash": "2a9c48ee7331f9db6c8a36f8b7695dbc990ba0ae414ed2bd674ac0659f5604af",
+  "blocktime": 1296688622
+ }
+}

@@ -1,0 +1,57 @@
+{
+ "jsonrpc": "2.0",
+ "id": 1,
+ "result": {
+  "in_active_chain": true,
+  "hex": "0600008098b684d85b16a5370000000090000000...(37268 chars)",
+  "height": 104,
+  "confirmations": 1,
+  "vin": [],
+  "vout": [],
+  "vShieldedSpend": [],
+  "vShieldedOutput": [],
+  "vjoinsplit": [],
+  "orchard": {
+   "actions": [],
+   "valueBalance": 0.0,
+   "valueBalanceZat": 0
+  },
+  "ironwood": {
+   "actions": [
+    {
+     "cv": "b3923355b263f71aa2625d7e77d400935a97fd14294bb968ddb9c06c52c291ac",
+     "nullifier": "7d44b5c4f1c45d96637ac1ddbb2771526dbba262adfb38e8374408b77895cb04",
+     "rk": "7cdf39ac7aade7298fd0db253a9e6ae5a83e47c0995605931ebf7e0caecf823a",
+     "cmx": "7c674a4c7f4c0782d61fcd2dbfdfa1e7d69ba337a1561545423dee6a46240a0a",
+     "ephemeralKey": "ab5de04f2bf8beeae2cd241acf334a27c5c3bd94e747e97ddddec03205c0d222",
+     "encCiphertext": "48eeaf28ff2bd39fb36e5da9b555e19cc6cb9961...(1160 chars)",
+     "spendAuthSig": "dfe1b7366af2df34f398be53cd0be556d4bc35c4...(128 chars)",
+     "outCiphertext": "4a195d8fca52f3c7810780cbbb20489e80e8c182...(160 chars)"
+    },
+    "...(5 total)"
+   ],
+   "valueBalance": 0.00025,
+   "valueBalanceZat": 25000,
+   "flags": {
+    "enableOutputs": true,
+    "enableSpends": true
+   },
+   "anchor": "fc5892395dfae6b9c1683eb6428d782d08595c3803ae9fd8df6affc3742fdc3a",
+   "proof": "8a865704f6f7e7a201b75ffd17ab3b124b4f658a...(28160 chars)",
+   "bindingSig": "f8e673da3933a1ca5f88bdb1af378d9e1a9e022e...(128 chars)"
+  },
+  "valueBalance": 0.0,
+  "valueBalanceZat": 0,
+  "size": 18634,
+  "time": 1296688622,
+  "txid": "067cf3fccb7918395c824b84df825d9e06310b2c98f1f537ab72d7ecbfa001ae",
+  "authdigest": "17da9a88f3b185cb62d218cb8f652b80f3c3003151e13cccd2ef29650276842a",
+  "overwintered": true,
+  "version": 6,
+  "versiongroupid": "d884b698",
+  "locktime": 0,
+  "expiryheight": 144,
+  "blockhash": "0a9c08f1c0e6312144832f9d8f554a4b038f7641e64c92f0791a452a707c356b",
+  "blocktime": 1296688622
+ }
+}

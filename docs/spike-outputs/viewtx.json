@@ -1,0 +1,50 @@
+{
+ "jsonrpc": "2.0",
+ "result": {
+  "txid": "067cf3fccb7918395c824b84df825d9e06310b2c98f1f537ab72d7ecbfa001ae",
+  "status": "mined",
+  "confirmations": 1,
+  "blockhash": "0a9c08f1c0e6312144832f9d8f554a4b038f7641e64c92f0791a452a707c356b",
+  "blockindex": 1,
+  "blocktime": 1296688622,
+  "version": 6,
+  "expiryheight": 144,
+  "fee": 0.00025,
+  "spends": [
+   {
+    "pool": "ironwood",
+    "action": 0,
+    "txidPrev": "db0eec4c7edf63e58adf42e6bfd0b223d8a4200a62cb47622280347e8f8762f9",
+    "actionPrev": 0,
+    "account_uuid": "f7dd6487-6e24-4e1a-bdf4-97897b79e4da",
+    "address": "uregtest1tsfz9l2g9ly3ulcmnwv5q7j5cnsermy...(220 chars)",
+    "value": 6.25,
+    "valueZat": 625000000
+   }
+  ],
+  "outputs": [
+   {
+    "pool": "ironwood",
+    "action": 0,
+    "account_uuid": "f7dd6487-6e24-4e1a-bdf4-97897b79e4da",
+    "outgoing": false,
+    "walletInternal": true,
+    "value": 1.4374375,
+    "valueZat": 143743750,
+    "memo": "f600000000000000000000000000000000000000...(1024 chars)"
+   },
+   "...(5 total)"
+  ],
+  "accounts": {
+   "ee61253e-1032-4f7d-ad03-e3ee54e138c6": {
+    "delta": 0.5,
+    "deltaZat": 50000000
+   },
+   "f7dd6487-6e24-4e1a-bdf4-97897b79e4da": {
+    "delta": -0.50025,
+    "deltaZat": -50025000
+   }
+  }
+ },
+ "id": 1
+}
