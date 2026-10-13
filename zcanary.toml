@@ -1,0 +1,29 @@
+# ZCanary walking-skeleton config (regtest only).
+[network]
+name = "regtest"
+timeout_s = 30
+# Network start is currently done by the pay command (scripts/spike.sh brings up Z3 regtest).
+start_command = ""
+
+[network.zebra]
+url = "http://127.0.0.1:29232"
+user = "zebra"
+password_env = "ZCANARY_ZEBRA_PASSWORD"   # Z3 regtest default is "zebra"; never put it in this file
+
+[network.zallet]
+url = "http://127.0.0.1:50232"
+user = "zebra"
+password_env = "ZCANARY_ZALLET_PASSWORD"
+
+[app]
+# Must make one shielded payment with a canary memo and write result_file:
+# {"txid", "recipient_address", "recipient_account", "canary"}
+pay_command = "scripts/spike.sh"
+result_file = "out/result.json"
+
+[expect]
+privacy = "fully-shielded"
+pool = "any-shielded"     # any-shielded | orchard | ironwood | sapling
+
+[report]
+path = "report.json"

@@ -1,0 +1,165 @@
+import pytest
+
+from zcanary import address, checks, pools, tx
+from zcanary.checks import FAIL, NOT_RUN, PASS
+
+KEYS = {"id", "status", "evidence", "message", "fix"}
+
+
+def spike_ua(fx):
+    return fx("spike/op.json")[0]["params"]["amounts"][0]["address"]
+
+
+def assert_shape(r):
+    assert set(r.to_dict()) == KEYS and r.status in (PASS, FAIL, NOT_RUN)
+    if r.status == FAIL:
+        assert r.fix
+
+
+# ---------- C1
+def test_c1_pass(fx):
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx)); assert_shape(r)
+    assert r.status == PASS
+
+
+def test_c1_fail_node_mainnet(fx):
+    r = checks.c1("regtest", fx("synthetic/chaininfo_mainnet.json"), spike_ua(fx)); assert_shape(r)
+    assert r.status == FAIL and "node reports chain 'main'" in r.message
+
+
+def test_c1_fail_address_wrong_network(fx):
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), "u1" + "q" * 100)
+    assert r.status == FAIL and "mainnet" in r.message
+
+
+def test_c1_fail_config_mismatch(fx):
+    r = checks.c1("mainnet", fx("spike/chaininfo_after.json"), spike_ua(fx))
+    assert r.status == FAIL
+
+
+def test_c1_not_run():
+    assert checks.c1("regtest", None, "x").status == NOT_RUN
+
+
+def test_c1_evidence_redacted(fx):
+    ua = spike_ua(fx)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), ua)
+    assert ua not in str(r.evidence)
+
+
+# ---------- C2
+def test_c2_fail_real_default_ua_has_p2pkh(fx):
+    r = checks.c2(spike_ua(fx), fx("spike/receivers_recipient.json")); assert_shape(r)
+    assert r.status == FAIL and "p2pkh" in r.message
+
+
+def test_c2_pass_shielded_only(fx):
+    rc = {k: v for k, v in fx("spike/receivers_recipient.json").items() if k != "p2pkh"}
+    assert checks.c2(spike_ua(fx), rc).status == PASS
+
+
+def test_c2_fail_transparent_only_ua(fx):
+    assert checks.c2(spike_ua(fx), fx("synthetic/receivers_transparent_only.json")).status == FAIL
+
+
+@pytest.mark.parametrize("a", ["tmHGc6iUGPss75FqukTNnCyLsH6bULzYN6Q", "t1abcdefghijklmnopqrstuvwxyz12345678"])
+def test_c2_fail_plain_transparent(a):
+    assert checks.c2(a, None).status == FAIL
+
+
+def test_c2_pass_legacy_sapling(fx):
+    sap = fx("spike/receivers_recipient.json")["sapling"]
+    assert checks.c2(sap, None).status == PASS
+
+
+def test_c2_not_run_when_rpc_failed(fx):
+    r = checks.c2(spike_ua(fx), None, receivers_error="timeout")
+    assert r.status == NOT_RUN and "timeout" in r.message
+
+
+# ---------- C3
+def test_c3_pass(fx):
+    assert checks.c3(tx.classify(fx("spike/rawtx.json"))).status == PASS
+
+
+def test_c3_fail_transparent_leg(fx):
+    r = checks.c3(tx.classify(fx("synthetic/tx_transparent_leg.json"))); assert_shape(r)
+    assert r.status == FAIL and "1 in, 1 out" in r.message
+
+
+def test_c3_coinbase_not_run(fx):
+    assert checks.c3(tx.classify(fx("synthetic/tx_coinbase.json"))).status == NOT_RUN
+
+
+def test_c3_not_run():
+    assert checks.c3(None).status == NOT_RUN
+
+
+# ---------- C4
+@pytest.mark.parametrize("case", ["a_orchard_only", "b_unified"])
+def test_c4_real_payments_use_ironwood(fx, case):
+    s = tx.classify(fx(f"pools/{case}_rawtx.json"))
+    d = pools.block_deltas(fx(f"pools/{case}_block.json"))
+    assert checks.c4(s, "any-shielded", d).status == PASS
+    assert checks.c4(s, "ironwood", d).status == PASS
+    r = checks.c4(s, "orchard", d); assert_shape(r)
+    assert r.status == FAIL and "ironwood" in r.message  # data-driven, not address-driven
+    assert checks.c4(s, "sapling", d).status == FAIL
+
+
+def test_c4_fail_multi_pool_real(fx):
+    s = tx.classify(fx("pools/c_sapling_rawtx.json"))
+    assert checks.c4(s, "any-shielded").status == FAIL
+    assert checks.c4(s, "sapling").status == FAIL
+
+
+def test_c4_fail_no_shielded():
+    s = tx.classify({"txid": "x", "version": 5, "vin": [{"txid": "a", "vout": 0}], "vout": [{}]})
+    assert checks.c4(s, "any-shielded").status == FAIL
+
+
+# ---------- C4b
+def test_c4b_pass_fee_only(fx):
+    r = checks.c4b(tx.classify(fx("spike/rawtx.json")), pools.block_deltas(fx("spike/block.json")))
+    assert r.status == PASS
+
+
+def test_c4b_fail_real_cross_pool(fx):
+    r = checks.c4b(tx.classify(fx("pools/c_sapling_rawtx.json")), pools.block_deltas(fx("pools/c_sapling_block.json")))
+    assert_shape(r)
+    assert r.status == FAIL and r.evidence["crossed_zat"] == 10000000
+
+
+def test_c4b_fail_synthetic_cross_pool(fx):
+    r = checks.c4b(tx.classify(fx("synthetic/tx_cross_pool.json")))
+    assert r.status == FAIL and r.evidence["crossed_zat"] == 50000000
+
+
+def test_c4b_fail_deshield(fx):
+    assert checks.c4b(tx.classify(fx("synthetic/tx_transparent_leg.json"))).status == FAIL
+
+
+# ---------- MEMO
+def test_memo_pass(fx):
+    v = fx("spike/viewtx.json")
+    canary = next(o["memoStr"] for o in v["outputs"] if o.get("memoStr"))
+    assert checks.memo(v, canary).status == PASS
+
+
+def test_memo_fail_wrong_canary(fx):
+    r = checks.memo(fx("spike/viewtx.json"), "ZCANARY-deadbeef"); assert_shape(r)
+    assert r.status == FAIL
+
+
+def test_memo_not_run():
+    assert checks.memo(None, "x").status == NOT_RUN
+
+
+# ---------- address
+@pytest.mark.parametrize("a,kind,net", [
+    ("uregtest1abc", "unified", "regtest"), ("u1abc", "unified", "mainnet"), ("utest1x", "unified", "testnet"),
+    ("zregtestsapling1x", "sapling", "regtest"), ("zs1x", "sapling", "mainnet"),
+    ("tmabc", "transparent", "testnet|regtest"), ("t1abc", "transparent", "mainnet"), ("???", "unknown", "unknown"),
+])
+def test_address_classify(a, kind, net):
+    assert address.classify(a) == (kind, net)

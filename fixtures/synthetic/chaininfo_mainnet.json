@@ -1,0 +1,115 @@
+{
+ "_synthetic": "spike chaininfo with chain=main",
+ "result": {
+  "chain": "main",
+  "blocks": 104,
+  "headers": 104,
+  "difficulty": 1.0,
+  "verificationprogress": 1.0,
+  "chainwork": 0,
+  "pruned": false,
+  "size_on_disk": 21432,
+  "commitments": 0,
+  "bestblockhash": "428b64c55cde42c88aa15235dd4bd3ca9cf5edd61a28a23385cd1e52d3125251",
+  "estimatedheight": 6603303,
+  "chainSupply": {
+   "chainValue": 650.0,
+   "chainValueZat": 65000000000,
+   "monitored": true
+  },
+  "valuePools": [
+   {
+    "id": "transparent",
+    "chainValue": 643.75025,
+    "chainValueZat": 64375025000,
+    "monitored": true
+   },
+   {
+    "id": "sprout",
+    "chainValue": 0.0,
+    "chainValueZat": 0,
+    "monitored": false
+   },
+   {
+    "id": "sapling",
+    "chainValue": 0.0,
+    "chainValueZat": 0,
+    "monitored": false
+   },
+   {
+    "id": "orchard",
+    "chainValue": 0.0,
+    "chainValueZat": 0,
+    "monitored": false
+   },
+   {
+    "id": "lockbox",
+    "chainValue": 0.0,
+    "chainValueZat": 0,
+    "monitored": false
+   },
+   {
+    "id": "ironwood",
+    "chainValue": 6.24975,
+    "chainValueZat": 624975000,
+    "monitored": true
+   }
+  ],
+  "upgrades": {
+   "5ba81b19": {
+    "name": "Overwinter",
+    "activationheight": 1,
+    "status": "active"
+   },
+   "76b809bb": {
+    "name": "Sapling",
+    "activationheight": 1,
+    "status": "active"
+   },
+   "2bb40e60": {
+    "name": "Blossom",
+    "activationheight": 1,
+    "status": "active"
+   },
+   "f5b9230b": {
+    "name": "Heartwood",
+    "activationheight": 1,
+    "status": "active"
+   },
+   "e9ff75a6": {
+    "name": "Canopy",
+    "activationheight": 1,
+    "status": "active"
+   },
+   "c2d6d0b4": {
+    "name": "NU5",
+    "activationheight": 2,
+    "status": "active"
+   },
+   "c8e71055": {
+    "name": "NU6",
+    "activationheight": 2,
+    "status": "active"
+   },
+   "4dec4df0": {
+    "name": "NU6.1",
+    "activationheight": 2,
+    "status": "active"
+   },
+   "5437f330": {
+    "name": "NU6.2",
+    "activationheight": 2,
+    "status": "active"
+   },
+   "37a5165b": {
+    "name": "NU6.3",
+    "activationheight": 2,
+    "status": "active"
+   }
+  },
+  "consensus": {
+   "chaintip": "37a5165b",
+   "nextblock": "37a5165b"
+  }
+ }
+}
