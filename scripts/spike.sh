@@ -5,7 +5,8 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 Z3_REF=${Z3_REF:-e84ce9fd8e864ff0b2a8a62f6ce14392145db0fb}   # ZcashFoundation/z3 main @ 2026-08-10
-OUT=$ROOT/out; mkdir -p "$OUT"
+OUT=${OUT:-$ROOT/out}; mkdir -p "$OUT"
+START=$(date +%s)
 RPC=$ROOT/scripts/rpc.sh
 ROUTER=http://127.0.0.1:8181     # rpc-router: Zebra+Zallet merged
 ZEBRA=http://127.0.0.1:29232     # direct Zebra
@@ -63,6 +64,8 @@ $RPC $ZEBRA generatetoaddress "[100,\"$S_T\"]" >/dev/null
 sleep 8
 $RPC $ROUTER z_getbalanceforaccount "[\"$SA\",1]" | tee "$OUT/balance_sender_before.json"; echo
 
+$RPC $ZEBRA getblockchaininfo > "$OUT/chaininfo_before.json"
+
 # --- 4. shielded send with canary memo
 MEMO=$(python3 -c "print('$CANARY'.encode().hex())")
 log "z_sendmany 0.5 ZEC sender->recipient, memo=$CANARY, FullPrivacy"
@@ -77,6 +80,8 @@ $RPC $ZEBRA generate '[1]' >/dev/null; sleep 8
 
 # --- 5. decode + wallet view
 $RPC $ZEBRA getrawtransaction "[\"$TXID\",1]" > "$OUT/rawtx.json"
+$RPC $ZEBRA getrawtransaction "[\"$TXID\",0]" > "$OUT/rawtx_hex.json"
+$RPC $ZEBRA getblockchaininfo > "$OUT/chaininfo_after.json"
 BH=$(j "d['result']['blockhash']" < "$OUT/rawtx.json")
 $RPC $ZEBRA getblock "[\"$BH\",1]" > "$OUT/block.json"
 $RPC $ROUTER z_viewtransaction "[\"$TXID\"]" > "$OUT/viewtx.json"
@@ -102,3 +107,4 @@ print('canary in public node data:',leak or 'none')
 print('GATE1', 'PASS' if ok else 'FAIL')
 sys.exit(0 if ok else 1)
 PY
+echo "elapsed_s=$(( $(date +%s) - START ))"
