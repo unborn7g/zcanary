@@ -1,0 +1,119 @@
+{
+  "zcanary": "0.0.1",
+  "overall": "pass",
+  "network": "regtest",
+  "expect": {
+    "privacy": "fully-shielded",
+    "pool": "any-shielded"
+  },
+  "txid": "d7fcd97e842ff0cc5634c8f2de8c72ebbed2bd48f771a7be011a0694b1c6a537",
+  "steps": {
+    "start": {
+      "status": "skipped",
+      "reason": "no command configured"
+    },
+    "pay": {
+      "cmd": "scripts/spike.sh",
+      "exit_code": 0,
+      "seconds": 102.2
+    }
+  },
+  "errors": {},
+  "result_error": null,
+  "seconds": 102.2,
+  "checks": [
+    {
+      "id": "C1",
+      "status": "pass",
+      "message": "node, address, and config agree on regtest",
+      "evidence": {
+        "config": "regtest",
+        "node_chain": "test",
+        "node_implies": [
+          "regtest",
+          "testnet"
+        ],
+        "recipient": "uregtest1ct4\u2026xku4px",
+        "recipient_kind": "unified",
+        "recipient_network": "regtest"
+      },
+      "fix": ""
+    },
+    {
+      "id": "C2",
+      "status": "pass",
+      "message": "unified address receivers: ['orchard', 'sapling']",
+      "evidence": {
+        "recipient": "uregtest1ct4\u2026xku4px",
+        "kind": "unified",
+        "receivers": [
+          "orchard",
+          "sapling"
+        ]
+      },
+      "fix": ""
+    },
+    {
+      "id": "C3",
+      "status": "pass",
+      "message": "no transparent inputs or outputs",
+      "evidence": {
+        "txid": "d7fcd97e842ff0cc5634c8f2de8c72ebbed2bd48f771a7be011a0694b1c6a537",
+        "transparent_in": 0,
+        "transparent_out": 0,
+        "sprout_joinsplits": 0,
+        "coinbase": false
+      },
+      "fix": ""
+    },
+    {
+      "id": "C4",
+      "status": "pass",
+      "message": "single shielded pool used: ironwood",
+      "evidence": {
+        "expect": "any-shielded",
+        "pools_used": [
+          "ironwood"
+        ],
+        "value_balance_zat": {
+          "sapling": 0,
+          "orchard": 0,
+          "ironwood": 25000
+        },
+        "block_deltas": {
+          "ironwood": -25000
+        }
+      },
+      "fix": ""
+    },
+    {
+      "id": "C4b",
+      "status": "pass",
+      "message": "no cross-pool movement (fee only: {'ironwood': 25000})",
+      "evidence": {
+        "value_balance_zat": {
+          "sapling": 0,
+          "orchard": 0,
+          "ironwood": 25000
+        },
+        "block_deltas": {
+          "ironwood": -25000
+        }
+      },
+      "fix": ""
+    },
+    {
+      "id": "MEMO",
+      "status": "pass",
+      "message": "recipient wallet decrypted the canary memo",
+      "evidence": {
+        "recipient_outputs": 1,
+        "pools": [
+          "ironwood"
+        ],
+        "memo_match": true
+      },
+      "fix": ""
+    }
+  ]
+}
