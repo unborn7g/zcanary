@@ -52,6 +52,9 @@ RA=$($RPC $ROUTER z_listaccounts | j "[a for a in d['result'] if a['name']=='rec
 SUA=$($RPC $ROUTER z_listaccounts | j "[a for a in d['result'] if a['name']=='sender'][0]['addresses'][0]['ua']")
 RUA=$($RPC $ROUTER z_listaccounts | j "[a for a in d['result'] if a['name']=='recipient'][0]['addresses'][0]['ua']")
 $RPC $ROUTER z_listunifiedreceivers "[\"$SUA\"]" > "$OUT/receivers_sender.json"
+# recipient pays-to address: shielded-only UA (no transparent receiver). RECIPIENT_RECEIVERS overrides.
+RRT=${RECIPIENT_RECEIVERS:-'["orchard","sapling"]'}
+[ "$RRT" = default ] || RUA=$($RPC $ROUTER z_getaddressforaccount "[\"$RA\",$RRT]" | j "d['result']['address']")
 $RPC $ROUTER z_listunifiedreceivers "[\"$RUA\"]" > "$OUT/receivers_recipient.json"
 S_ORCH=$(j "d['result']['orchard']" < "$OUT/receivers_sender.json")
 S_T=$(j "d['result']['p2pkh']" < "$OUT/receivers_sender.json")
@@ -86,6 +89,7 @@ BH=$(j "d['result']['blockhash']" < "$OUT/rawtx.json")
 $RPC $ZEBRA getblock "[\"$BH\",1]" > "$OUT/block.json"
 $RPC $ROUTER z_viewtransaction "[\"$TXID\"]" > "$OUT/viewtx.json"
 $RPC $ROUTER z_getbalanceforaccount "[\"$RA\",1]" > "$OUT/balance_recipient.json"
+python3 -c "import json,sys;json.dump(dict(zip(['txid','recipient_address','recipient_account','canary'],sys.argv[1:])),open(sys.argv[5],'w'),indent=1)" "$TXID" "$RUA" "$RA" "$CANARY" "$OUT/result.json"
 
 python3 - "$OUT" "$CANARY" "$RA" <<'PY'
 import json,sys,os,glob
