@@ -1,0 +1,30 @@
+{
+    "jsonrpc": "2.0",
+    "result": [
+        {
+            "id": "opid-5536e359-9991-4b53-ad9c-c2571e7b1993",
+            "method": "z_sendmany",
+            "params": {
+                "fromaddress": "uregtest15rl5lytwt0ngm06dvlsxcrmuwfq8hlhe62ws42432q0rgnycw68p55eamuemlc3jc9mg39frgc63ad47haq0dwz743xnxgdzhul37hsk",
+                "amounts": [
+                    {
+                        "address": "uregtest1x08jc56t9xm8fw8k295zdwlsnkl95nrqkc6dq6put7zdna29q3ptqruckyk6my4m4qdztnfde6k8tuax0ff3pqdv7edjasrszwg92665h5pgtwmef0g4majytnkmyfzxxhv6glppuw8h6r0dqjxffqg762mkflu7xeuprq0cke5wrrnfe86rpfsvgxf3rs76qr53790rep5qs206gnv",
+                        "amount": 0.5,
+                        "memo": "5a43414e4152592d3864646166363666"
+                    }
+                ],
+                "minconf": 1
+            },
+            "status": "success",
+            "creation_time": 1791928565,
+            "result": {
+                "txid": "8e87c0eb19ecd4858fdf1552ca7503ad1e55f219b90a08e043c4bb9d2ea60fcc",
+                "txids": [
+                    "8e87c0eb19ecd4858fdf1552ca7503ad1e55f219b90a08e043c4bb9d2ea60fcc"
+                ]
+            },
+            "execution_secs": 5
+        }
+    ],
+    "id": 1
+}

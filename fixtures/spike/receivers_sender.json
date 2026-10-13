@@ -1,0 +1,9 @@
+{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+        "orchard": "uregtest15rl5lytwt0ngm06dvlsxcrmuwfq8hlhe62ws42432q0rgnycw68p55eamuemlc3jc9mg39frgc63ad47haq0dwz743xnxgdzhul37hsk",
+        "sapling": "zregtestsapling1tnplvzkr9dxk6fvepzj94u75syf5vp36amw57lkgxakz7hu3f5gz3jupfwvuv7ug0jmdv2zx7rr",
+        "p2pkh": "tmW6nYHmpE4k7ZLCmViqpiqPovKZkpJNM4b"
+    }
+}
