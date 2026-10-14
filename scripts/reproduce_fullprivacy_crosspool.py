@@ -14,7 +14,7 @@ from zcanary.tx import classify
 
 
 def main() -> int:
-    version = os.environ.get("ZCANARY_ZALLET_VERSION", "0.1.0-beta.3")
+    version = os.environ.get("ZCANARY_ZALLET_VERSION", "0.1.0-beta.1")
     if version not in ("0.1.0-beta.1", "0.1.0-beta.3"):
         print("unsupported Zallet policy-fixture version", file=sys.stderr)
         return 2

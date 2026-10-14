@@ -6,10 +6,10 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 Z3_REF=${Z3_REF:-e84ce9fd8e864ff0b2a8a62f6ce14392145db0fb}   # Z3 Compose/config pin
-# Override the older image defaults embedded in this Z3 commit: beta.3 policy code
-# with Zebra 6.3.0 (NU6.3/Ironwood-capable). Both defaults are immutable digests.
-export Z3_ZEBRA_IMAGE=${Z3_ZEBRA_IMAGE:-zfnd/zebra:6.3.0@sha256:52a67e543906c98a0ed1599e2ce3ee238fc05b40592ae26ee5914ddb6ede51e3}
-export Z3_ZALLET_IMAGE=${Z3_ZALLET_IMAGE:-zodlinc/zallet:v0.1.0-beta.3@sha256:54d1a774317371b1e88c8a54712cdfa4aa7d8f20ae2a0205f9a190e502aef0f6}
+# Keep the previously runtime-tested beta.1 baseline as the default until beta.3
+# passes the complete runtime suite. Both images are pinned by immutable digest.
+export Z3_ZEBRA_IMAGE=${Z3_ZEBRA_IMAGE:-zfnd/zebra:6.2.3@sha256:bb2a6029db277ee3a10e951dcc0ddd36b4cbcbe0fad684746d695ee21d53fde2}
+export Z3_ZALLET_IMAGE=${Z3_ZALLET_IMAGE:-zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d}
 OUT=${OUT:-$ROOT/out}; mkdir -p "$OUT"
 START=$(date +%s)
 RPC=$ROOT/scripts/rpc.sh
@@ -43,7 +43,7 @@ if [ -z "${KEEP:-}" ]; then
   # The pinned Z3 initializer derives Zallet's auth hash from this env value.
   export Z3_REGTEST_RPC_ROUTER_PASSWORD="$ZCANARY_ZALLET_PASSWORD"
   ./scripts/regtest-init.sh --prepare-only >/dev/null 2>&1
-  ZCANARY_ZALLET_VERSION=${ZCANARY_ZALLET_VERSION:-0.1.0-beta.3}
+  ZCANARY_ZALLET_VERSION=${ZCANARY_ZALLET_VERSION:-0.1.0-beta.1}
   case "$ZCANARY_ZALLET_VERSION" in
     0.1.0-beta.1) ;;
     0.1.0-beta.3) ;;

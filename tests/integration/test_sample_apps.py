@@ -127,6 +127,8 @@ def test_beta3_rejects_exact_fullprivacy_ironwood_to_sapling_call():
     env = os.environ.copy()
     env.update(
         {
+            "Z3_ZEBRA_IMAGE": "zfnd/zebra:6.3.0@sha256:52a67e543906c98a0ed1599e2ce3ee238fc05b40592ae26ee5914ddb6ede51e3",
+            "Z3_ZALLET_IMAGE": "zodlinc/zallet:v0.1.0-beta.3@sha256:54d1a774317371b1e88c8a54712cdfa4aa7d8f20ae2a0205f9a190e502aef0f6",
             "ZCANARY_ZALLET_VERSION": "0.1.0-beta.3",
             "ZCANARY_NODE_RPC": "http://127.0.0.1:29232",
             "ZCANARY_NODE_USER": "zebra",
