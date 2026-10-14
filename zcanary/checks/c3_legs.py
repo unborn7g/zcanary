@@ -10,7 +10,16 @@ def check(tx: TxSummary | None) -> CheckResult:
     if tx is None:
         return not_run(cid, "no decoded transaction")
     ev = {"txid": tx.txid, "transparent_in": tx.transparent_in, "transparent_out": tx.transparent_out,
-          "sprout_joinsplits": tx.sprout_joinsplits, "coinbase": tx.coinbase}
+          "sprout_joinsplits": tx.sprout_joinsplits, "coinbase": tx.coinbase,
+          "unknown_keys": tx.unknown_keys}
+    if tx.unknown_keys:
+        return CheckResult(
+            cid,
+            FAIL,
+            "unrecognised transaction format; cannot verify unknown fields: " + ", ".join(tx.unknown_keys),
+            ev,
+            "Update the transaction parser for these fields before trusting the privacy checks.",
+        )
     if tx.coinbase:
         return CheckResult(cid, NOT_RUN, "coinbase transaction: not an app payment", ev,
                            "Point ZCanary at the app's payment txid, not a coinbase.")

@@ -24,7 +24,16 @@ def check(tx: TxSummary | None, expect_pool: str, block_deltas: dict[str, int] |
     used = tx.pools_used
     ev = {"expect": expect_pool, "pools_used": used,
           "value_balance_zat": {p: tx.bundles[p].value_balance_zat for p in SHIELDED_POOLS},
+          "unknown_keys": tx.unknown_keys,
           **_block_note(tx, block_deltas)}
+    if tx.unknown_keys:
+        return CheckResult(
+            cid,
+            FAIL,
+            "unrecognised transaction format; cannot verify unknown fields: " + ", ".join(tx.unknown_keys),
+            ev,
+            "Update the transaction parser for these fields before trusting the privacy checks.",
+        )
     if not used:
         return CheckResult(cid, FAIL, "no shielded bundle in the transaction", ev, "Send a shielded payment.")
     if expect_pool == "any-shielded":
@@ -75,7 +84,16 @@ def check_crossing(tx: TxSummary | None, block_deltas: dict[str, int] | None = N
     pos = {p: v for p, v in vb.items() if v > 0}
     ev = {"value_balance_zat": vb, "fee_zat": fee, "zip317_fee_zat": z,
           "transparent_in_zat": tx.transparent_in_zat, "transparent_out_zat": tx.transparent_out_zat,
-          "negative_pools": neg, "positive_pools": pos, **_block_note(tx, block_deltas)}
+          "negative_pools": neg, "positive_pools": pos, "unknown_keys": tx.unknown_keys,
+          **_block_note(tx, block_deltas)}
+    if tx.unknown_keys:
+        return CheckResult(
+            cid,
+            FAIL,
+            "unrecognised transaction format; cannot verify unknown fields: " + ", ".join(tx.unknown_keys),
+            ev,
+            "Update the transaction parser for these fields before trusting the privacy checks.",
+        )
     if neg and pos:
         crossed = min(sum(-v for v in neg.values()), sum(pos.values()))
         ev["crossed_zat"] = crossed

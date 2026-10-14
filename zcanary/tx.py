@@ -41,6 +41,7 @@ class TxSummary:
             "txid": self.txid, "version": self.version, "coinbase": self.coinbase,
             "transparent_in": self.transparent_in, "transparent_out": self.transparent_out,
             "sprout_joinsplits": self.sprout_joinsplits,
+            "unknown_keys": self.unknown_keys,
             "bundles": {p: vars(b) for p, b in self.bundles.items()},
         }
 
@@ -49,6 +50,30 @@ _KNOWN = {"hex", "height", "confirmations", "in_active_chain", "vin", "vout", "v
           "vjoinsplit", "orchard", "ironwood", "valueBalance", "valueBalanceZat", "size", "time", "txid",
           "authdigest", "overwintered", "version", "versiongroupid", "locktime", "expiryheight", "blockhash",
           "blocktime", "bindingSig", "joinSplitPubKey", "joinSplitSig"}
+_BUNDLE_FIELDS = {
+    "orchard": {"actions", "valueBalance", "valueBalanceZat"},
+    "ironwood": {"actions", "anchor", "bindingSig", "flags", "proof", "valueBalance", "valueBalanceZat"},
+}
+_FLAG_FIELDS = {"enableOutputs", "enableSpends"}
+
+
+def _unknown_fields(tx: dict) -> list[str]:
+    unknown = set(tx) - _KNOWN
+    for pool, known_fields in _BUNDLE_FIELDS.items():
+        if pool not in tx or tx[pool] is None:
+            continue
+        bundle = tx[pool]
+        if not isinstance(bundle, dict):
+            unknown.add(pool)
+            continue
+        unknown.update(f"{pool}.{key}" for key in set(bundle) - known_fields)
+        flags = bundle.get("flags")
+        if flags is not None:
+            if not isinstance(flags, dict):
+                unknown.add(f"{pool}.flags")
+            else:
+                unknown.update(f"{pool}.flags.{key}" for key in set(flags) - _FLAG_FIELDS)
+    return sorted(unknown)
 
 
 def _vin_value(vin: list) -> int | None:
@@ -69,7 +94,7 @@ def classify(tx: dict) -> TxSummary:
         txid=tx.get("txid", ""), version=int(tx.get("version", 0)), coinbase=coinbase,
         transparent_in=0 if coinbase else len(vin), transparent_out=len(tx.get("vout") or []),
         sprout_joinsplits=len(tx.get("vjoinsplit") or []), bundles=bundles,
-        unknown_keys=sorted(set(tx) - _KNOWN),
+        unknown_keys=_unknown_fields(tx),
         transparent_out_zat=sum(int(o.get("valueZat") or 0) for o in tx.get("vout") or []),
         transparent_in_zat=0 if (coinbase or not vin) else _vin_value(vin),
     )
