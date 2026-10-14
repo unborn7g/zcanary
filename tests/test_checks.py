@@ -18,39 +18,55 @@ def assert_shape(r):
 
 # ---------- C1
 def test_c1_pass(fx):
-    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS); assert_shape(r)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS, "regtest", REGTEST_GENESIS); assert_shape(r)
     assert r.status == PASS
 
 
 def test_c1_fail_node_mainnet(fx):
-    r = checks.c1("regtest", fx("synthetic/chaininfo_mainnet.json"), spike_ua(fx), REGTEST_GENESIS); assert_shape(r)
+    r = checks.c1("regtest", fx("synthetic/chaininfo_mainnet.json"), spike_ua(fx), REGTEST_GENESIS, "regtest", REGTEST_GENESIS); assert_shape(r)
     assert r.status == FAIL and "node reports chain 'main'" in r.message
 
 
 def test_c1_fail_address_wrong_network(fx):
-    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), "u1" + "q" * 100, REGTEST_GENESIS)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), "u1" + "q" * 100, REGTEST_GENESIS, "regtest", REGTEST_GENESIS)
     assert r.status == FAIL and "mainnet" in r.message
 
 
 def test_c1_fail_config_mismatch(fx):
-    r = checks.c1("mainnet", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS)
+    r = checks.c1("mainnet", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS, "regtest", REGTEST_GENESIS)
     assert r.status == FAIL
 
 
 def test_c1_not_run():
-    assert checks.c1("regtest", None, "x", REGTEST_GENESIS).status == NOT_RUN
+    assert checks.c1("regtest", None, "x", REGTEST_GENESIS, "regtest", REGTEST_GENESIS).status == NOT_RUN
 
 
 def test_c1_evidence_redacted(fx):
     ua = spike_ua(fx)
-    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), ua, REGTEST_GENESIS)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), ua, REGTEST_GENESIS, "regtest", REGTEST_GENESIS)
     assert ua not in str(r.evidence)
+
+
+def test_c1_not_run_without_app_network(fx):
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS)
+    assert r.status == NOT_RUN and "app did not report" in r.message
+
+
+def test_c1_fail_app_network_mismatch(fx):
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS, "testnet", TESTNET_GENESIS)
+    assert r.status == FAIL and "app reports network 'testnet'" in r.message
+
+
+def test_c1_fail_app_genesis_mismatch(fx):
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS, "regtest", TESTNET_GENESIS)
+    assert r.status == FAIL and "app wallet endpoint genesis hash" in r.message
 
 
 # ---------- C2
 def test_c2_fail_real_default_ua_has_p2pkh(fx):
     r = checks.c2(spike_ua(fx), fx("spike/receivers_recipient.json")); assert_shape(r)
-    assert r.status == FAIL and "p2pkh" in r.message
+    assert r.status == FAIL and "p2pkh" in r.message and "address-policy" in r.message
+    assert "does not establish" in r.evidence["finding_scope"]
 
 
 def test_c2_pass_shielded_only(fx):
@@ -171,23 +187,23 @@ TESTNET_GENESIS = "05a60a92d99d85997cce3b87616c089f6124d7342af37106edc76126334a2
 
 
 def test_c1_pass_checks_genesis(fx):
-    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS, "regtest", REGTEST_GENESIS)
     assert r.status == PASS and "genesis" in r.message and r.evidence["genesis_network"] == "regtest"
 
 
 def test_c1_fail_testnet_genesis_with_chain_test(fx):
     # chain="test" alone cannot distinguish testnet from regtest; the genesis hash can.
-    r = checks.c1("regtest", fx("synthetic/chaininfo_testnet.json"), spike_ua(fx), TESTNET_GENESIS); assert_shape(r)
-    assert r.status == FAIL and "testnet" in r.message
+    r = checks.c1("regtest", fx("synthetic/chaininfo_testnet.json"), spike_ua(fx), TESTNET_GENESIS, "regtest", REGTEST_GENESIS); assert_shape(r)
+    assert r.status == FAIL and "node genesis hash is the testnet genesis" in r.message
 
 
 def test_c1_fail_unknown_genesis(fx):
-    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), "ab" * 32)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), "ab" * 32, "regtest", REGTEST_GENESIS)
     assert r.status == FAIL and "unknown genesis" in r.message
 
 
 def test_c1_not_run_without_genesis(fx):
-    assert checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), None).status == NOT_RUN
+    assert checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), None, "regtest", REGTEST_GENESIS).status == NOT_RUN
 
 
 # ---------- Step 1: C4b fee derivation

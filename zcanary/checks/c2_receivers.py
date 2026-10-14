@@ -32,8 +32,11 @@ def check(recipient: str | None, receivers: dict | None, expect_privacy: str = "
     ev["receivers"] = types
     t = [k for k in types if k in TRANSPARENT_KEYS]
     if t and strict:
-        return CheckResult(cid, FAIL, f"unified address contains transparent receiver(s): {t}", ev,
-                           "Derive the UA with shielded receivers only, e.g. "
+        ev["finding_scope"] = "address-policy only; does not establish which receiver the transaction used"
+        return CheckResult(cid, FAIL,
+                           f"address-policy failure: unified address offers transparent receiver(s): {t}; "
+                           "this does not prove the payment used one (see C3 transaction legs)", ev,
+                           "For a strict receiver-set policy, derive the UA with shielded receivers only, e.g. "
                            "z_getaddressforaccount <account> [\"orchard\",\"sapling\"].")
     if not any(k in ("orchard", "sapling", "ironwood") for k in types):
         return CheckResult(cid, FAIL, "unified address has no shielded receiver", ev, "Use a shielded receiver.")
