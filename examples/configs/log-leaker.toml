@@ -1,0 +1,36 @@
+# Isolated Docker regtest fixture for log-leaker; never point this at public networks.
+[network]
+name = "regtest"
+timeout_s = 30
+command_timeout_s = 1200
+start_command = "../../scripts/prepare-regtest.sh"
+stop_command = "../../scripts/stop-regtest.sh"
+context_file = "../../out/context.json"
+
+[network.zebra]
+url = "http://127.0.0.1:29232"
+user = "zebra"
+password_env = "ZCANARY_ZEBRA_PASSWORD"
+
+[network.zallet]
+url = "http://127.0.0.1:8181"
+user = "zebra"
+password_env = "ZCANARY_ZALLET_PASSWORD"
+
+[app]
+start = ""
+pay = "../../examples/log-leaker/pay.sh"
+logs = ["cat ../../out/app.log"]
+stop = ""
+result_file = "../../out/result.json"
+log_file = "../../out/app.log"
+amount = "0.5"
+
+[expect]
+privacy = "fully-shielded"
+pool = "any-shielded"
+
+[report]
+path = "../../out/reports/log-leaker.json"
+markdown_path = "../../out/reports/log-leaker.md"
+scan_files = ["../../out/result.json"]
