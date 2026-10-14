@@ -43,7 +43,8 @@ if [ -z "${KEEP:-}" ]; then
   HELPER_PULL_START=$(python3 -c 'import time; print(time.monotonic_ns())')
   run_with_tail "pinned regtest-init helper image pull" docker pull "$BUSYBOX_REF"
   HELPER_PULL_END=$(python3 -c 'import time; print(time.monotonic_ns())')
-  run_with_tail "tag pinned regtest-init helper image" docker tag busybox:1.36.1 busybox:latest
+  run_with_tail "tag pinned regtest-init helper image version" docker tag "$BUSYBOX_REF" busybox:1.36.1
+  run_with_tail "tag pinned regtest-init helper image latest" docker tag "$BUSYBOX_REF" busybox:latest
   [ -f .env.regtest ] && $DC --profile "*" down -v >/dev/null 2>&1 || true
   docker volume rm -f z3-regtest-zallet z3-regtest-chain >/dev/null 2>&1 || true
   # The pinned Z3 initializer derives Zallet's auth hash from this env value.
