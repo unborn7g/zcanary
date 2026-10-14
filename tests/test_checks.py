@@ -250,9 +250,15 @@ def test_c4b_fail_cross_pool_any_negative(fx):
     assert r.status == FAIL and "negative" in r.message and r.evidence["negative_pools"] == {"sapling": -1}
 
 
-def test_c4b_fail_sum_not_fee(fx):
-    r = checks.c4b(tx.classify(fx("synthetic/tx_fee_mismatch.json"))); assert_shape(r)
-    assert r.status == FAIL and "ZIP-317" in r.message
+def test_c4b_pass_same_payment_fee_5000_over_zip317_with_warning(fx):
+    raw = fx("spike/rawtx.json")
+    raw["ironwood"]["valueBalance"] = 0.0003
+    raw["ironwood"]["valueBalanceZat"] = 30000
+    r = checks.c4b(tx.classify(raw))
+    assert r.status == PASS
+    assert r.evidence["fee_zat"] == 30000
+    assert r.evidence["zip317_fee_zat"] == 25000
+    assert "differs" in r.evidence["warning"]
 
 
 # ---------- Step 1: C4 orchard explanation
