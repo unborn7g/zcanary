@@ -1,5 +1,5 @@
 """C4: the shielded pool actually used (from decoded bundles, cross-checked with block valuePools deltas).
-C4b: no value crossing between pools beyond the fee.
+C4b: no value enters a shielded pool from another pool and value leaves at most one shielded pool.
 
 Driven by docs/pool-behavior.md: on Zebra 6.2.3 + Zallet v0.1.0-beta.1 with NU6.3 active, payments to
 Orchard receivers move value through the *ironwood* bundle, so the pool is read from the tx, never
@@ -66,12 +66,13 @@ def zip317_fee(tx: TxSummary) -> int:
 
 
 def check_crossing(tx: TxSummary | None, block_deltas: dict[str, int] | None = None) -> CheckResult:
-    """Check per-transaction pool effects against the transaction-derived ZIP-317 fee.
+    """Check per-transaction pool effects and report the actual and conventional fees.
 
-    Positive `valueBalanceZat` means value leaves a shielded pool; negative means it
-    enters one. A negative recipient-pool valueBalance is a shielded-pool crossing only
-    when positive valueBalance identifies a shielded source pool. Block `valueDeltaZat`
-    has the opposite sign and is retained as a cross-check, not used for attribution.
+    Pass requires no negative shielded valueBalance, positive valueBalance in at most
+    one pool, and no transparent legs. ZIP-317 is a conventional estimate: a difference
+    from the transaction-derived fee is reported as a warning, not a failure. Positive
+    `valueBalanceZat` means value leaves a pool; negative means value enters it. Block
+    `valueDeltaZat` has the opposite sign and is a cross-check, not attribution.
     """
     cid = "C4b"
     if tx is None:
@@ -82,7 +83,16 @@ def check_crossing(tx: TxSummary | None, block_deltas: dict[str, int] | None = N
     z = zip317_fee(tx)
     neg = {p: v for p, v in vb.items() if v < 0}
     pos = {p: v for p, v in vb.items() if v > 0}
-    ev = {"value_balance_zat": vb, "fee_zat": fee, "zip317_fee_zat": z,
+    if fee is None:
+        warning = (
+            "transaction-derived fee unavailable because a transparent input value is missing; "
+            f"conventional ZIP-317 fee is {z} zat"
+        )
+    elif fee != z:
+        warning = f"transaction-derived fee {fee} zat differs from conventional ZIP-317 fee {z} zat"
+    else:
+        warning = None
+    ev = {"value_balance_zat": vb, "fee_zat": fee, "zip317_fee_zat": z, "warning": warning,
           "transparent_in_zat": tx.transparent_in_zat, "transparent_out_zat": tx.transparent_out_zat,
           "negative_pools": neg, "positive_pools": pos, "unknown_keys": tx.unknown_keys,
           **_block_note(tx, block_deltas)}
@@ -94,11 +104,16 @@ def check_crossing(tx: TxSummary | None, block_deltas: dict[str, int] | None = N
             ev,
             "Update the transaction parser for these fields before trusting the privacy checks.",
         )
-    if neg and pos:
-        crossed = min(sum(-v for v in neg.values()), sum(pos.values()))
+    if neg:
+        crossed = min(sum(-v for v in neg.values()), sum(pos.values())) if pos else 0
         ev["crossed_zat"] = crossed
-        return CheckResult(cid, FAIL, f"negative shielded valueBalance {neg}: {crossed} zat entered "
-                                      f"{sorted(neg)} from positive source pool(s) {sorted(pos)}; amount is public", ev,
+        if pos:
+            message = (f"negative shielded valueBalance {neg}: {crossed} zat entered {sorted(neg)} "
+                       f"from positive source pool(s) {sorted(pos)}; amount is public")
+        else:
+            message = (f"negative shielded valueBalance {neg} entered {sorted(neg)}, but no shielded "
+                       "source pool can be identified")
+        return CheckResult(cid, FAIL, message, ev,
                            "Pay a receiver in the same pool as the sender's notes, or migrate funds deliberately.")
     if len(pos) > 1:
         return CheckResult(cid, FAIL, f"value left multiple shielded pools: {pos}", ev, "Spend from a single pool.")
@@ -106,7 +121,7 @@ def check_crossing(tx: TxSummary | None, block_deltas: dict[str, int] | None = N
         return CheckResult(cid, FAIL, f"transparent legs present: {total} zat left {sorted(pos)}, "
                                       f"fee {fee} zat, transparent out {tx.transparent_out_zat} zat (see C3)", ev,
                            "Do not pay or spend transparent outputs.")
-    if total != z:
-        return CheckResult(cid, FAIL, f"shielded valueBalances sum to {total} zat but the ZIP-317 fee for this tx "
-                                      f"is {z} zat, with no transparent legs", ev, "Inspect the transaction manually.")
-    return CheckResult(cid, PASS, f"no cross-pool movement: only the fee ({fee} zat) left {sorted(pos)}", ev)
+    message = f"no negative shielded valueBalances; value left at most one pool ({sorted(pos)}); no transparent legs; derived fee {fee} zat"
+    if warning:
+        message += f". Warning: {warning}"
+    return CheckResult(cid, PASS, message, ev)

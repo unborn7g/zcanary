@@ -22,6 +22,8 @@ NOT_COVERED = [
     "App databases, analytics, telemetry, crash dumps, or logs not explicitly configured for capture.",
     "Mainnet/production behavior, real funds, and production credentials; this workflow is regtest-only.",
     "Wallet/node combinations beyond those separately identified in docs/version-matrix.md.",
+    "Future transaction fields and pools are not decoded; detected unknown transaction fields make C3/C4/C4b fail closed, but those formats remain unverified.",
+    "C4b reports the transaction-derived fee and warns when it differs from conventional ZIP-317; it does not certify miner fee policy or infer hidden transparent input values.",
     "NU7-era behavior and public testnet behavior, which are outside this phase's scope.",
     "A complete privacy/security audit or a guarantee that no sensitive data can leak.",
 ]

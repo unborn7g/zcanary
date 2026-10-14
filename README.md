@@ -7,7 +7,7 @@ Checks include:
 - **C1:** expected network, the node chain and known genesis hash, recipient network prefix, and the app-reported network agree.
 - **C2:** strict receiver-set policy. A Unified Address with a transparent receiver fails this address-policy check; that alone does **not** prove the payment used it.
 - **C3:** the decoded transaction itself has no transparent inputs or outputs.
-- **C4/C4b:** the transaction uses the expected shielded pool and has no cross-pool value movement beyond the transaction-derived ZIP-317 fee.
+- **C4/C4b:** C4 inspects decoded pool bundles; C4b fails on negative shielded valueBalances, value leaving multiple shielded pools, or transparent legs. It reports the derived transaction fee and warns—but does not fail—if it differs from conventional ZIP-317.
 - **MEMO:** the recipient wallet decrypts the unique per-run memo marker.
 - **C6:** unique memo, label, and test-id markers are searched in configured captured logs/artifacts. Reports include labels, counts, and source names only.
 

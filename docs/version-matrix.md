@@ -44,13 +44,13 @@ The beta.3 candidates are Zebra `zfnd/zebra:6.3.0@sha256:52a67e543906c98a0ed1599
 |---|---|---|---|
 | C1 regtest genesis | Zebra 6.2.3 returned `getblockhash 0 = 029f11d80ef9765602235e1bc9727e3eb6ba20839319f761fee920d63401e327`. | yes — historical pinned node | `chain="test"` alone is ambiguous; C1 also compares the genesis hash to the known map. The beta.3 node has not been queried. |
 | Orchard receiver placement | On Zebra 6.2.3 / Zallet beta.1 with NU6.3 active, an Orchard receiver delivered into Ironwood; transaction bundle counts and valueBalances were captured. Block `valuePools` deltas were a cross-check. | yes — those versions only | Do not generalize to beta.3 or other activation schedules; block aggregates do not attribute a crossing by themselves. See `docs/pool-behavior.md`. |
-| C4b same-pool and cross-pool behavior | Historical same-pool fee-only and Ironwood-to-Sapling transaction fixtures; unit tests also cover tiny crossing and a transparent deshield larger than the derived fee. | yes — historical fixtures; synthetic cases are test-only | No claim that a total-delta sum alone identifies a crossing. Per-pool transaction valueBalances are compared using the documented sign convention. |
+| C4b same-pool and cross-pool behavior | Historical same-pool fee-only and Ironwood-to-Sapling transaction fixtures; unit tests also cover tiny crossing, a transparent deshield larger than the derived fee, and a +5000 zat fee deviation. | yes — historical fixtures; fee-deviation case is synthetic | Pass requires no negative shielded valueBalance, at most one pool with positive valueBalance, and no transparent legs. The transaction-derived fee is evidence; a deviation from conventional ZIP-317 is a warning, not a failure. |
 
 ## Reproduction and CI status
 
 | Claim | Status | Verified at runtime? |
 |---|---|---|
-| Unit tests | Latest local result: 76 passed, 8 skipped; non-integration: 76 passed, 8 deselected. | yes — local unit/fixture tests |
+| Unit tests | Latest local result: 79 passed, 8 skipped; non-integration: 79 passed, 8 deselected. | yes — local unit/fixture tests |
 | Docker-backed integration and six apps | Eight integration cases are written; Docker is unavailable in this workspace. | no |
 | Cold image-pull and total GitHub Actions time | The workflow records the initial Compose service-image plus pinned `regtest-init` helper pull and integration-job elapsed time. | no — no Actions run/link yet |
 | CI credentials | Private Actions secrets `ZCANARY_ZEBRA_PASSWORD` and `ZCANARY_ZALLET_PASSWORD` are required; values are not in the repository. | no — remote CI has not run |
