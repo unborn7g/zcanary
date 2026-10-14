@@ -18,32 +18,32 @@ def assert_shape(r):
 
 # ---------- C1
 def test_c1_pass(fx):
-    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx)); assert_shape(r)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS); assert_shape(r)
     assert r.status == PASS
 
 
 def test_c1_fail_node_mainnet(fx):
-    r = checks.c1("regtest", fx("synthetic/chaininfo_mainnet.json"), spike_ua(fx)); assert_shape(r)
+    r = checks.c1("regtest", fx("synthetic/chaininfo_mainnet.json"), spike_ua(fx), REGTEST_GENESIS); assert_shape(r)
     assert r.status == FAIL and "node reports chain 'main'" in r.message
 
 
 def test_c1_fail_address_wrong_network(fx):
-    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), "u1" + "q" * 100)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), "u1" + "q" * 100, REGTEST_GENESIS)
     assert r.status == FAIL and "mainnet" in r.message
 
 
 def test_c1_fail_config_mismatch(fx):
-    r = checks.c1("mainnet", fx("spike/chaininfo_after.json"), spike_ua(fx))
+    r = checks.c1("mainnet", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS)
     assert r.status == FAIL
 
 
 def test_c1_not_run():
-    assert checks.c1("regtest", None, "x").status == NOT_RUN
+    assert checks.c1("regtest", None, "x", REGTEST_GENESIS).status == NOT_RUN
 
 
 def test_c1_evidence_redacted(fx):
     ua = spike_ua(fx)
-    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), ua)
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), ua, REGTEST_GENESIS)
     assert ua not in str(r.evidence)
 
 
@@ -163,3 +163,59 @@ def test_memo_not_run():
 ])
 def test_address_classify(a, kind, net):
     assert address.classify(a) == (kind, net)
+
+
+# ---------- Step 1: C1 genesis hash
+REGTEST_GENESIS = "029f11d80ef9765602235e1bc9727e3eb6ba20839319f761fee920d63401e327"
+TESTNET_GENESIS = "05a60a92d99d85997cce3b87616c089f6124d7342af37106edc76126334a2c38"
+
+
+def test_c1_pass_checks_genesis(fx):
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), REGTEST_GENESIS)
+    assert r.status == PASS and "genesis" in r.message and r.evidence["genesis_network"] == "regtest"
+
+
+def test_c1_fail_testnet_genesis_with_chain_test(fx):
+    # chain="test" alone cannot distinguish testnet from regtest; the genesis hash can.
+    r = checks.c1("regtest", fx("synthetic/chaininfo_testnet.json"), spike_ua(fx), TESTNET_GENESIS); assert_shape(r)
+    assert r.status == FAIL and "testnet" in r.message
+
+
+def test_c1_fail_unknown_genesis(fx):
+    r = checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), "ab" * 32)
+    assert r.status == FAIL and "unknown genesis" in r.message
+
+
+def test_c1_not_run_without_genesis(fx):
+    assert checks.c1("regtest", fx("spike/chaininfo_after.json"), spike_ua(fx), None).status == NOT_RUN
+
+
+# ---------- Step 1: C4b fee derivation
+def test_c4b_reports_derived_fee(fx):
+    r = checks.c4b(tx.classify(fx("spike/rawtx.json")))
+    assert r.status == PASS and r.evidence["fee_zat"] == 25000 and r.evidence["zip317_fee_zat"] == 25000
+
+
+def test_c4b_fail_deshield_larger_than_fee(fx):
+    r = checks.c4b(tx.classify(fx("synthetic/tx_deshield_gt_fee.json"))); assert_shape(r)
+    assert r.status == FAIL and r.evidence["fee_zat"] == 30000 and "transparent" in r.message
+
+
+def test_c4b_fail_cross_pool_any_negative(fx):
+    r = checks.c4b(tx.classify(fx("synthetic/tx_cross_pool_tiny.json"))); assert_shape(r)
+    assert r.status == FAIL and "negative" in r.message and r.evidence["negative_pools"] == {"sapling": -1}
+
+
+def test_c4b_fail_sum_not_fee(fx):
+    r = checks.c4b(tx.classify(fx("synthetic/tx_fee_mismatch.json"))); assert_shape(r)
+    assert r.status == FAIL and "ZIP-317" in r.message
+
+
+# ---------- Step 1: C4 orchard explanation
+def test_c4_orchard_fail_explains_ironwood(fx):
+    s = tx.classify(fx("pools/a_orchard_only_rawtx.json"))
+    r = checks.c4(s, "orchard", pools.block_deltas(fx("pools/a_orchard_only_block.json")))
+    assert r.status == FAIL
+    assert "Orchard receivers deliver into the Ironwood pool" in r.message
+    assert r.evidence["ironwood_actions"] > 0 and r.evidence["orchard_actions"] == 0
+    assert "ironwood" in r.evidence["block_deltas"] and "docs/pool-behavior.md" in r.evidence["reference"]

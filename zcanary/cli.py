@@ -70,6 +70,7 @@ def run(cfg_path: str) -> int:
     zebra, zallet = Zebra(cfg.zebra, cfg.timeout_s), Zallet(cfg.zallet, cfg.timeout_s)
     errors: dict[str, str] = {}
     chain, e = _try(zebra.chain); e and errors.setdefault("getblockchaininfo", e)
+    genesis, e = _try(zebra.genesis); e and errors.setdefault("getblockhash", e)
     rcv = rcv_err = None
     if recipient and recipient.lower().startswith("u"):
         rcv, rcv_err = _try(zebra.receivers, recipient)
@@ -84,7 +85,7 @@ def run(cfg_path: str) -> int:
         view, e = _try(zallet.view, txid); e and errors.setdefault("z_viewtransaction", e)
 
     results = [
-        checks.c1(cfg.network, chain, recipient),
+        checks.c1(cfg.network, chain, recipient, genesis),
         checks.c2(recipient, rcv, cfg.expect_privacy, rcv_err),
         checks.c3(summary),
         checks.c4(summary, cfg.expect_pool, deltas),

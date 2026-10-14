@@ -29,6 +29,8 @@ class TxSummary:
     sprout_joinsplits: int
     bundles: dict[str, Bundle] = field(default_factory=dict)
     unknown_keys: list[str] = field(default_factory=list)
+    transparent_out_zat: int = 0
+    transparent_in_zat: int | None = 0  # None: inputs present but their values are not in the verbose tx
 
     @property
     def pools_used(self) -> list[str]:
@@ -49,6 +51,11 @@ _KNOWN = {"hex", "height", "confirmations", "in_active_chain", "vin", "vout", "v
           "blocktime", "bindingSig", "joinSplitPubKey", "joinSplitSig"}
 
 
+def _vin_value(vin: list) -> int | None:
+    vals = [i.get("valueZat", (i.get("prevout") or {}).get("valueZat")) for i in vin]
+    return None if any(v is None for v in vals) else sum(int(v) for v in vals)
+
+
 def classify(tx: dict) -> TxSummary:
     vin = tx.get("vin") or []
     coinbase = any("coinbase" in i for i in vin)
@@ -63,4 +70,6 @@ def classify(tx: dict) -> TxSummary:
         transparent_in=0 if coinbase else len(vin), transparent_out=len(tx.get("vout") or []),
         sprout_joinsplits=len(tx.get("vjoinsplit") or []), bundles=bundles,
         unknown_keys=sorted(set(tx) - _KNOWN),
+        transparent_out_zat=sum(int(o.get("valueZat") or 0) for o in tx.get("vout") or []),
+        transparent_in_zat=0 if (coinbase or not vin) else _vin_value(vin),
     )

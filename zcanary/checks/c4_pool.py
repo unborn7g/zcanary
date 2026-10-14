@@ -34,41 +34,60 @@ def check(tx: TxSummary | None, expect_pool: str, block_deltas: dict[str, int] |
                            "Keep sender funds and recipient receiver in the same pool.")
     if used == [expect_pool]:
         return CheckResult(cid, PASS, f"pool {expect_pool} used as expected", ev)
-    hint = ""
     if expect_pool == "orchard" and "ironwood" in used:
-        hint = (" (with NU6.3 active, Orchard receivers receive into the ironwood pool; see docs/pool-behavior.md)")
-    return CheckResult(cid, FAIL, f"expected pool {expect_pool}, transaction used {used}{hint}", ev,
+        ev.update({"orchard_actions": tx.bundles["orchard"].actions, "ironwood_actions": tx.bundles["ironwood"].actions,
+                   "reference": "docs/pool-behavior.md"})
+        ev.setdefault("block_deltas", None)
+        return CheckResult(cid, FAIL,
+            "expected pool orchard, but on these versions (Zebra 6.2.3 / Zallet with NU6.3 active) Orchard receivers "
+            f"deliver into the Ironwood pool. Evidence: tx has {tx.bundles['orchard'].actions} orchard actions and "
+            f"{tx.bundles['ironwood'].actions} ironwood actions (ironwood valueBalance "
+            f"{tx.bundles['ironwood'].value_balance_zat} zat); block valuePools deltas: {ev.get('block_deltas')}", ev,
+            "Set expect.pool = \"ironwood\" (or \"any-shielded\") for this stack; see docs/pool-behavior.md.")
+    return CheckResult(cid, FAIL, f"expected pool {expect_pool}, transaction used {used}", ev,
                        "Set expect.pool to the pool your wallet stack actually uses, or fix note selection.")
 
 
+def zip317_fee(tx: TxSummary) -> int:
+    """ZIP-317 conventional fee: 5000 zat * max(2, logical actions)."""
+    sap = tx.bundles["sapling"]
+    logical = (max(tx.transparent_in, tx.transparent_out) + max(sap.spends, sap.outputs)
+               + tx.bundles["orchard"].actions + tx.bundles["ironwood"].actions)
+    return 5000 * max(2, logical)
+
+
 def check_crossing(tx: TxSummary | None, block_deltas: dict[str, int] | None = None) -> CheckResult:
-    """A single-pool shielded tx has exactly one non-zero valueBalance (= +fee). A negative valueBalance
-    in any shielded pool means value entered that pool from elsewhere in the tx."""
+    """Fee = sum(transparent in) - sum(transparent out) + sum(shielded valueBalances).
+    FAIL if any shielded valueBalance is negative (value entered that pool), or, with no transparent legs,
+    if the shielded balances do not sum to the ZIP-317 fee."""
     cid = "C4b"
     if tx is None:
         return not_run(cid, "no decoded transaction")
     vb = {p: tx.bundles[p].value_balance_zat for p in SHIELDED_POOLS}
-    nz = {p: v for p, v in vb.items() if v}
-    ev = {"value_balance_zat": vb, **_block_note(tx, block_deltas)}
-    entering = {p: -v for p, v in nz.items() if v < 0}
-    leaving = {p: v for p, v in nz.items() if v > 0}
-    if entering and leaving:
-        crossed = min(sum(entering.values()), sum(leaving.values()))
+    total = sum(vb.values())
+    fee = None if tx.transparent_in_zat is None else tx.transparent_in_zat - tx.transparent_out_zat + total
+    z = zip317_fee(tx)
+    neg = {p: v for p, v in vb.items() if v < 0}
+    pos = {p: v for p, v in vb.items() if v > 0}
+    ev = {"value_balance_zat": vb, "fee_zat": fee, "zip317_fee_zat": z,
+          "transparent_in_zat": tx.transparent_in_zat, "transparent_out_zat": tx.transparent_out_zat,
+          "negative_pools": neg, **_block_note(tx, block_deltas)}
+    if neg:
+        crossed = min(sum(-v for v in neg.values()), sum(pos.values())) if pos else 0
         ev["crossed_zat"] = crossed
-        return CheckResult(cid, FAIL,
-                           f"{crossed} zat moved from {sorted(leaving)} into {sorted(entering)}; amount is public", ev,
+        src = f" from {sorted(pos)}" if pos else ""
+        if not pos and tx.transparent_in:
+            src = " from transparent inputs (see C3)"
+        return CheckResult(cid, FAIL, f"negative shielded valueBalance {neg}: {sum(-v for v in neg.values())} zat "
+                                      f"entered {sorted(neg)}{src}; amount is public", ev,
                            "Pay a receiver in the same pool as the sender's notes, or migrate funds deliberately.")
-    if len(leaving) > 1:
-        ev["note"] = "value left more than one shielded pool"
-        return CheckResult(cid, FAIL, f"value left multiple shielded pools: {leaving}", ev,
-                           "Spend from a single pool.")
-    if entering and not tx.transparent_in:
-        return CheckResult(cid, FAIL, f"value entered {sorted(entering)} with no visible source", ev,
-                           "Inspect the transaction manually.")
-    if entering:
-        return CheckResult(cid, FAIL, f"transparent value shielded into {sorted(entering)} (see C3)", ev,
-                           "Spend shielded funds only.")
-    if leaving and tx.transparent_out:
-        return CheckResult(cid, FAIL, f"value left {sorted(leaving)} to transparent outputs (see C3)", ev,
-                           "Do not pay transparent outputs.")
-    return CheckResult(cid, PASS, f"no cross-pool movement (fee only: {leaving or 0})", ev)
+    if len(pos) > 1:
+        return CheckResult(cid, FAIL, f"value left multiple shielded pools: {pos}", ev, "Spend from a single pool.")
+    if tx.transparent_in or tx.transparent_out:
+        return CheckResult(cid, FAIL, f"transparent legs present: {total} zat left {sorted(pos)}, "
+                                      f"fee {fee} zat, transparent out {tx.transparent_out_zat} zat (see C3)", ev,
+                           "Do not pay or spend transparent outputs.")
+    if total != z:
+        return CheckResult(cid, FAIL, f"shielded valueBalances sum to {total} zat but the ZIP-317 fee for this tx "
+                                      f"is {z} zat, with no transparent legs", ev, "Inspect the transaction manually.")
+    return CheckResult(cid, PASS, f"no cross-pool movement: only the fee ({fee} zat) left {sorted(pos)}", ev)

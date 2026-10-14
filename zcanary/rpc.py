@@ -59,6 +59,7 @@ class Zebra(RpcClient):
         super().__init__(ep, timeout_s, "zebra")
 
     def chain(self) -> dict: return self.call("getblockchaininfo")
+    def genesis(self) -> str: return self.call("getblockhash", 0)
     def rawtx(self, txid: str) -> dict: return self.call("getrawtransaction", txid, 1)
     def rawtx_hex(self, txid: str) -> str: return self.call("getrawtransaction", txid, 0)
     def block(self, h: str) -> dict: return self.call("getblock", h, 1)
