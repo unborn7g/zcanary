@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Run unit tests
+        run: python -m pytest -q -m "not integration"
+
+  integration:
+    name: Disposable Docker regtest integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ZCANARY_RUN_INTEGRATION: "1"
+      # These are ephemeral regtest RPC credentials, not wallet keys or seeds.
+      # Configure them as private repository Actions secrets; never put values in TOML.
+      ZCANARY_ZEBRA_PASSWORD: ${{ secrets.ZCANARY_ZEBRA_PASSWORD }}
+      ZCANARY_ZALLET_PASSWORD: ${{ secrets.ZCANARY_ZALLET_PASSWORD }}
+    steps:
+      - name: Record integration job start time
+        run: echo "CI_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Verify Docker availability
+        run: docker compose version && docker info
+      - name: Run sample-app integration tests
+        run: python -m pytest -q -m integration
+      - name: Scan generated report artifacts
+        if: always()
+        run: python scripts/scan-artifacts.py out/reports out/image-pull-timing.json
+      - name: Write timing and result summary
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, time
+          from pathlib import Path
+          started = int(os.environ.get("CI_STARTED_EPOCH", "0") or "0")
+          total = time.time() - started if started else None
+          timing_path = Path("out/image-pull-timing.json")
+          if timing_path.exists():
+              pull = json.loads(timing_path.read_text()).get("pull_seconds")
+              pull_text = f"{pull} s (first Compose service pull plus pinned regtest-init helper pull)"
+          else:
+              pull_text = "not recorded; check integration preflight/startup failure"
+          print("## Regtest integration timing")
+          print(f"- First image-pull time: {pull_text}")
+          print(f"- Integration job elapsed time: {round(total, 1)} s" if total is not None else "- Integration job elapsed time: unavailable")
+          print("- Raw app logs and wallet data are not uploaded.")
+          PY
+      - name: Upload sanitized reports and timing
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zcanary-regtest-reports
+          path: |
+            out/reports/*.json
+            out/reports/*.md
+            out/image-pull-timing.json
+          if-no-files-found: error
+          retention-days: 14
