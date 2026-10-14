@@ -24,18 +24,26 @@ def test_pinned_busybox_is_pulled_and_tagged_before_both_initializers():
     script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
     lines = script.splitlines()
     pull_lines = [i for i, line in enumerate(lines) if "docker pull" in line]
-    tag_lines = [i for i, line in enumerate(lines) if "docker tag busybox:1.36.1 busybox:latest" in line]
+    tag_lines = [i for i, line in enumerate(lines) if "docker tag " in line]
     init_lines = [i for i, line in enumerate(lines) if "./scripts/regtest-init.sh" in line and not line.lstrip().startswith("#")]
 
     assert BUSYBOX_REF in script
     assert len(pull_lines) == 1
-    assert len(tag_lines) == 1
+    assert len(tag_lines) == 2
     assert len(init_lines) == 2
     assert pull_lines[0] < min(init_lines)
-    assert tag_lines[0] < min(init_lines)
+    assert max(tag_lines) < min(init_lines)
     for index in [*pull_lines, *init_lines]:
         assert "2>&1" not in lines[index]
         assert ">/dev/null" not in lines[index]
+
+
+def test_busybox_tags_are_created_from_the_digest_reference():
+    script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
+
+    assert 'docker tag "$BUSYBOX_REF" busybox:1.36.1' in script
+    assert 'docker tag "$BUSYBOX_REF" busybox:latest' in script
+    assert not re.search(r"\bdocker\s+tag\s+busybox:1\.36\.1(?:\s|$)", script)
 
 
 def test_run_with_tail_redacts_secrets_and_shows_only_last_20_lines(tmp_path):
