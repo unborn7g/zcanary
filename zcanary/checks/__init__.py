@@ -28,5 +28,6 @@ from .c2_receivers import check as c2  # noqa: E402
 from .c3_legs import check as c3  # noqa: E402
 from .c4_pool import check as c4, check_crossing as c4b  # noqa: E402
 from .memo import check as memo  # noqa: E402
+from .c6_canaries import check as c6  # noqa: E402
 
-__all__ = ["CheckResult", "PASS", "FAIL", "NOT_RUN", "not_run", "c1", "c2", "c3", "c4", "c4b", "memo"]
+__all__ = ["CheckResult", "PASS", "FAIL", "NOT_RUN", "not_run", "c1", "c2", "c3", "c4", "c4b", "memo", "c6"]

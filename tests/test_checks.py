@@ -171,7 +171,7 @@ def test_memo_pass(fx):
 
 
 def test_memo_fail_wrong_canary(fx):
-    r = checks.memo(fx("spike/viewtx.json"), "ZCANARY-deadbeef"); assert_shape(r)
+    r = checks.memo(fx("spike/viewtx.json"), "UNIT-TEST-OTHER-MEMO"); assert_shape(r)
     assert r.status == FAIL
 
 
