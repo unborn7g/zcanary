@@ -1,7 +1,7 @@
-# ZCanary Day-1 spike (Gate 1)
+# Historical Phase 1 spike (Gate 1, beta.1 baseline)
 
-**Result: Gate 1 PASS**, 2026-10-13 (Lagos time), on a Debian 13 x86_64 box with Docker 29.9.0 and Compose v5.6.0.
-`scripts/spike.sh` runs the whole flow from a wiped regtest in about 100 s and exits 0 only when every check passes.
+**Historical result: Gate 1 PASS**, 2026-10-13 (Lagos time), on a Debian 13 x86_64 box with Docker 29.9.0 and Compose v5.6.0. This records the beta.1 run, not runtime evidence for the current beta.3 default; see `docs/version-matrix.md`.
+The historical beta.1 version of `scripts/spike.sh` completed the flow in about 100 s. The current script defaults to beta.3 and has not yet been runtime-tested in this workspace.
 
 ## Pinned versions
 | Component | Version |
@@ -14,27 +14,26 @@
 
 Regtest config: Canopy activates at height 1 and NU5 through **NU6.3** at height 2. In this NU6.3 regtest, an **Orchard receiver in a UA receives notes in the `ironwood` pool**. The wallet's spends and outputs all report `pool: "ironwood"`, and the `orchard` bundle stays empty.
 
-Endpoints: rpc-router `127.0.0.1:8181` (merged Zebra + Zallet), Zebra `127.0.0.1:29232`, Zallet `127.0.0.1:50232`. Auth is `zebra`/`zebra` basic auth.
+Historical endpoints: rpc-router `127.0.0.1:8181` (merged Zebra + Zallet) and Zebra `127.0.0.1:29232`. RPC password values are omitted. The current harness reads credentials only from environment variables; no credentials should be pasted into command text or reports.
 
 ## Flow (what spike.sh does)
 1. `z3/scripts/regtest-init.sh`, then `docker compose --env-file .env.regtest up -d`.
 2. `z_getnewaccount sender` and `z_getnewaccount recipient`. The default UA has orchard, sapling and p2pkh receivers. **It has no separate ironwood receiver.**
 3. Funding: `generatetoaddress [1, <sender orchard-only UA>]` (Zebra RPC) mines a **shielded coinbase** that lands in ironwood. Then 100 more blocks for coinbase maturity.
    The alternative path also works: mine to the sender's p2pkh, then `z_shieldcoinbase <account_uuid> <orchard UA> null 1`, which gives transparent vin plus ironwood outputs.
-4. `z_sendmany <sender orchard UA> [{address: <recipient UA>, amount: 0.5, memo: hex("ZCANARY-xxxx")}] 1 null "FullPrivacy"`, then `z_getoperationresult`, then mine 1 block.
+4. `z_sendmany <sender orchard UA> [{address: <recipient UA>, amount: 0.5, memo: hex($ZCANARY_MEMO)}] 1 null "FullPrivacy"`, then `z_getoperationresult`, then mine 1 block. The per-run marker value is not retained in this note.
 5. Zebra `getrawtransaction [txid,1]` and `getblock [hash,1]`. Zallet `z_viewtransaction`, `z_getbalanceforaccount` and `z_listunspent`.
 
 ## Evidence (fresh run)
 ```
 tx 067cf3fc...01ae version 6 {transparent_vin:0, transparent_vout:0, sapling_spends:0, sapling_outputs:0,
    orchard_actions:0, ironwood_actions:5, sprout_js:0}
-recipient outputs [('ironwood', 0.5, 'ZCANARY-bf01d8b5')]
+recipient outputs [('ironwood', 0.5, '<per-run memo marker redacted>')]
 block valuePools deltas {'transparent': 625025000, 'ironwood': -25000}   # transparent delta = coinbase
-canary in public node data: none     (rawtx/block JSON grep, plain and hex)
+canary in public node data: none     (historical ad hoc rawtx/block grep, plain and hex)
 GATE1 PASS
 ```
-The canary also appears in 0 lines of the zebra, zallet and rpc-router container logs (`docker compose logs | grep`).
-Trimmed RPC outputs are in `docs/spike-outputs/`. `saplingtx.json` and `shieldtx.json` come from the first manual chain, before the reset.
+The historical ad hoc container-log grep observed no marker in the specific logs checked, but it was not a comprehensive leak scan. The current C6 claim is limited to configured, captured sources. Trimmed RPC outputs are in `docs/spike-outputs/`; old raw wallet-view data is retained only as a test fixture and its marker is not a credential.
 
 ## What the decoded tx exposes (inputs for checks C3/C4)
 `getrawtransaction verbose` from Zebra 6.2.3 on a v6 tx returns these top-level keys:
@@ -51,7 +50,7 @@ Trimmed RPC outputs are in `docs/spike-outputs/`. `saplingtx.json` and `shieldtx
 Suggested C3: `len(vin)==len(vout)==0` and `vjoinsplit==[]`. Suggested C4 (pool): exactly one of sapling, orchard or ironwood is non-empty and matches the expected pool. Also require all other pools' valueBalance to be 0.
 
 ## Cross-pool observation
-See `docs/finding-fullprivacy.md` (UNCONFIRMED research notes).
+The beta.1 FullPrivacy Ironwood-to-Sapling crossing is documented as a runtime observation in `docs/finding-fullprivacy.md`; its explanation from source branches remains an inference. Beta.3 behavior is pending runtime verification.
 
 ## z_listunifiedreceivers
 It works. Zebra and Zallet both implement it, and the router answers with Zebra's version.

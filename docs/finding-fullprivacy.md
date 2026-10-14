@@ -1,6 +1,6 @@
-# UNCONFIRMED: `FullPrivacy` z_sendmany produced a cross-pool (ironwood → sapling) transaction
+# Beta.1 runtime regression fixture: `FullPrivacy` crossed Ironwood → Sapling
 
-**Status: UNCONFIRMED observation. Research notes only. Not reported upstream and not classified.**
+**Status:** The beta.1 behavior below was reproduced at runtime on three separate regtest chains. It is retained as a known-bad beta.1 fixture, not as a general vulnerability classification. Beta.3's fix is supported by source/release notes only until the exact call is rerun against that image.
 
 ## Environment (pinned)
 - Zallet `zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d` (source tag `v0.1.0-beta.1`, commit `5be0f4861feedc47978102c627c6293dea2d7838`)
@@ -52,4 +52,4 @@ For comparison, a transparent recipient under `FullPrivacy` is rejected synchron
 - Behavior without NU6.3 active is untested.
 
 ## Reproduce
-`scripts/spike.sh && scripts/pool_probe.sh` (case `c_sapling` makes this call).
+The exact call is implemented in `scripts/reproduce_fullprivacy_crosspool.py`. For beta.1, source `fixtures/version-matrix/beta1-known-bad.env`, set the two regtest RPC password environment variables, run `scripts/prepare-regtest.sh`, run the Python reproducer, and stop with `scripts/stop-regtest.sh`. The beta.3 integration test uses the same call and expects a policy rejection. Both new Docker-backed runs are pending in this workspace.

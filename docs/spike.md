@@ -1,6 +1,8 @@
-# Spike: rerun from a clean Docker state
+# Historical Phase 1 spike: beta.1 baseline (2026-10-13)
 
-## Pinned versions
+This records the earlier runtime run. It is not the current default image pin; see [version-matrix.md](version-matrix.md) for current beta.3 source/runtime status. The old outputs are regression fixtures, not evidence that beta.3 was runtime-tested.
+
+## Pinned versions at the time of this run
 | Component | Tag | Digest |
 |---|---|---|
 | Z3 | git `e84ce9fd8e864ff0b2a8a62f6ce14392145db0fb` (ZcashFoundation/z3) | n/a |
@@ -28,7 +30,7 @@ scripts/spike.sh            # fresh: wipes the z3-regtest volumes itself
 KEEP=1 scripts/spike.sh     # reuse an already-running stack
 ```
 
-What `spike.sh` does, step by step (each step is also a raw curl call in `scripts/rpc.sh <url> <method> '<json params>'`):
+What the historical beta.1 run did, step by step (the current script has since changed its pins and setup flow; see `docs/version-matrix.md`; each RPC step is also available via `scripts/rpc.sh <url> <method> '<json params>'`):
 1. If `net.bridge.bridge-nf-call-iptables=1`, set it to 0. On the dev box, leftover iptables-legacy `FORWARD DROP` rules blocked container-to-container traffic.
 2. `git clone https://github.com/ZcashFoundation/z3 && git checkout e84ce9fd…`
 3. `./scripts/regtest-init.sh`, then `docker compose --env-file .env.regtest up -d`
@@ -39,7 +41,7 @@ What `spike.sh` does, step by step (each step is also a raw curl call in `script
 8. `generate [1]`, then `getrawtransaction [txid,1]`, `getrawtransaction [txid,0]`, `getblockchaininfo`, `getblock [hash,1]`, and `z_viewtransaction [txid]`
 9. Checks: no transparent legs, the recipient's memo matches the canary, and the canary is not in the public JSON.
 
-RPC auth is `zebra`/`zebra` (Z3's regtest-only default). No seeds or keys leave the Zallet volume.
+The historical run used Z3's disposable regtest RPC credentials; the literal value is intentionally omitted. The current harness accepts Zebra and Zallet passwords only through environment variables. Wallet seed material remains inside the isolated Zallet Docker volume; this historical run did not perform a comprehensive secret scan.
 
 ## Rerun results (2026-10-13, Lagos)
 | Run | Starting state | Result | Wall time |

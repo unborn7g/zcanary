@@ -1,8 +1,7 @@
-# Pool behavior on the pinned regtest (Zebra 6.2.3, Zallet v0.1.0-beta.1, Z3 e84ce9fd; NU5 through NU6.3 active at height 2)
+# Pool behavior on the historical beta.1 regtest (Zebra 6.2.3, Zallet v0.1.0-beta.1, Z3 e84ce9fd; NU5 through NU6.3 active at height 2)
 
-Setup: the sender's funds are all in the **ironwood** pool. Spending was always from the sender's orchard-only UA receiver.
-Each payment is 0.1 ZEC (10000000 zat), uses privacy policy `FullPrivacy`, and is mined alone in its own block (nTx=2: coinbase + payment).
-Reproduce with `scripts/spike.sh && scripts/pool_probe.sh`. Raw evidence is in `fixtures/pools/`: `*_sendmany_response.json`, `*_op.json`, `*_rawtx.json` (getrawtransaction verbose) and `*_block.json` (getblock 1).
+Setup: the sender's spendable Orchard-receiver notes were in the **Ironwood** pool. Spending was always from the sender's Orchard receiver. Each payment is 0.1 ZEC (10000000 zat), uses privacy policy `FullPrivacy`, and is mined alone in its own block (nTx=2: coinbase + payment). These are version-specific historical observations, not beta.3 results.
+Reproduce using the beta.1 profile in `fixtures/version-matrix/beta1-known-bad.env`, `scripts/prepare-regtest.sh`, then `scripts/pool_probe.sh`. For the exact FullPrivacy-to-Sapling call, use `scripts/reproduce_fullprivacy_crosspool.py`. Raw evidence is in `fixtures/pools/`: `*_sendmany_response.json`, `*_op.json`, `*_rawtx.json` (getrawtransaction verbose) and `*_block.json` (getblock 1).
 
 | case | tx bundles (count, valueBalanceZat) | block valuePools valueDeltaZat (non-zero) |
 |---|---|---|
@@ -24,6 +23,9 @@ The block's transparent delta always includes the coinbase (6.25 ZEC subsidy = 6
 - Any spend that actually uses the Orchard pool.
 - Behavior before NU6.3 activation.
 
-## Implications for checks
-- C4 must classify by **decoded bundles** (non-empty bundle / non-zero valueBalance), not by address type. In this setup an "orchard" address yields ironwood.
-- C4b: across all shielded pools, sum the valueBalances. A pool with a negative valueBalance means value entered it from elsewhere in the tx, which is a crossing. In a single-pool tx the only non-zero valueBalance is the positive fee.
+## Signed pool-delta convention and implications for checks
+
+For decoded transaction `valueBalanceZat`, **positive means value leaves that pool** and **negative means value enters that pool**. Zebra block `valueDeltaZat` uses the opposite sign for the transaction contribution (and also includes other transactions such as coinbase), so block values are a cross-check rather than attribution by themselves. A same-pool send can have one positive valueBalance equal to the fee. A cross-pool send can still have all-pool valueBalances summing to the fee; aggregate sum alone cannot identify the crossing.
+
+- C4 must classify by **decoded bundles** (non-empty bundle / non-zero valueBalance), not by address type. In this version/config an Orchard receiver yields Ironwood.
+- C4b derives the transaction fee from transparent in/out amounts and shielded valueBalances, compares it with ZIP-317, and examines **each pool's signed transaction `valueBalanceZat`**. A negative transaction valueBalance indicates value entered that pool; the corresponding positive valueBalance identifies a shielded source pool. The block's opposite-signed valueDelta alone is not used to infer a crossing. Same-pool fee-only controls are required to avoid treating the ordinary fee as a crossing.
