@@ -42,6 +42,34 @@ def test_endpoint_repr_hides_password(monkeypatch):
     assert ep.password() == "s3cr3t-pw" and "s3cr3t" not in repr(ep)
 
 
+def test_config_app_lifecycle_and_logs():
+    d = json.loads(json.dumps(BASE))
+    d["network"].update(start_command="echo network-up", stop_command="echo network-down",
+                         context_file="out/context.json")
+    d["app"].update(start="echo app-up", pay="python pay.py", logs=["cat out/app.log"],
+                    stop="echo app-down", amount="0.25", log_file="out/app.log")
+    d["report"] = {"scan_files": ["out/result.json"]}
+    c = config.parse(d)
+    assert (c.start_command, c.stop_command, c.context_file) == ("echo network-up", "echo network-down", "out/context.json")
+    assert (c.app_start_command, c.pay_command, c.log_commands, c.app_stop_command) == (
+        "echo app-up", "python pay.py", ("cat out/app.log",), "echo app-down")
+    assert c.amount == "0.25" and c.log_file == "out/app.log" and c.scan_files == ("out/result.json",)
+
+
+def test_config_rejects_credentials_in_url():
+    d = json.loads(json.dumps(BASE))
+    d["network"]["zebra"]["url"] = "http://user:password@example.invalid:1234"
+    with pytest.raises(config.ConfigError, match="must not contain credentials"):
+        config.parse(d)
+
+
+def test_config_rejects_bad_password_env_name():
+    d = json.loads(json.dumps(BASE))
+    d["network"]["zebra"]["password_env"] = "ZC-PW"
+    with pytest.raises(config.ConfigError, match="environment variable name"):
+        config.parse(d)
+
+
 class _H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 

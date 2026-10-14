@@ -1,29 +1,36 @@
-# ZCanary walking-skeleton config (regtest only).
+# All commands run only against the disposable Docker regtest configured by the scripts.
 [network]
 name = "regtest"
 timeout_s = 30
-# Network start is currently done by the pay command (scripts/spike.sh brings up Z3 regtest).
-start_command = ""
+command_timeout_s = 1200
+start_command = "scripts/prepare-regtest.sh"
+stop_command = "scripts/stop-regtest.sh"
+context_file = "out/context.json"
 
 [network.zebra]
 url = "http://127.0.0.1:29232"
 user = "zebra"
-password_env = "ZCANARY_ZEBRA_PASSWORD"   # Z3 regtest default is "zebra"; never put it in this file
+password_env = "ZCANARY_ZEBRA_PASSWORD"
 
 [network.zallet]
-url = "http://127.0.0.1:50232"
+url = "http://127.0.0.1:8181"
 user = "zebra"
 password_env = "ZCANARY_ZALLET_PASSWORD"
 
 [app]
-# Must make one shielded payment with a canary memo and write result_file:
-# {"txid", "recipient_address", "recipient_account", "canary"}
-pay_command = "scripts/spike.sh"
+start = ""
+pay = "examples/clean-shop/pay.sh"
+logs = ["cat out/app.log"]
+stop = ""
 result_file = "out/result.json"
+log_file = "out/app.log"
+amount = "0.5"
 
 [expect]
 privacy = "fully-shielded"
-pool = "any-shielded"     # any-shielded | orchard | ironwood | sapling
+pool = "any-shielded"
 
 [report]
-path = "report.json"
+path = "out/report.json"
+markdown_path = "out/report.md"
+scan_files = ["out/result.json"]
