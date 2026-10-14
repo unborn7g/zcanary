@@ -5,7 +5,9 @@
 #        KEEP=1 scripts/spike.sh (reuse a running test stack)
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
+source "$ROOT/scripts/lib/diagnostics.sh"
 Z3_REF=${Z3_REF:-e84ce9fd8e864ff0b2a8a62f6ce14392145db0fb}   # Z3 Compose/config pin
+BUSYBOX_REF='busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662'
 # Keep the previously runtime-tested beta.1 baseline as the default until beta.3
 # passes the complete runtime suite. Both images are pinned by immutable digest.
 export Z3_ZEBRA_IMAGE=${Z3_ZEBRA_IMAGE:-zfnd/zebra:6.2.3@sha256:bb2a6029db277ee3a10e951dcc0ddd36b4cbcbe0fad684746d695ee21d53fde2}
@@ -38,11 +40,15 @@ cd z3
 DC="docker compose --env-file .env.regtest"
 if [ -z "${KEEP:-}" ]; then
   log "resetting regtest stack"
+  HELPER_PULL_START=$(python3 -c 'import time; print(time.monotonic_ns())')
+  run_with_tail "pinned regtest-init helper image pull" docker pull "$BUSYBOX_REF"
+  HELPER_PULL_END=$(python3 -c 'import time; print(time.monotonic_ns())')
+  run_with_tail "tag pinned regtest-init helper image" docker tag busybox:1.36.1 busybox:latest
   [ -f .env.regtest ] && $DC --profile "*" down -v >/dev/null 2>&1 || true
   docker volume rm -f z3-regtest-zallet z3-regtest-chain >/dev/null 2>&1 || true
   # The pinned Z3 initializer derives Zallet's auth hash from this env value.
   export Z3_REGTEST_RPC_ROUTER_PASSWORD="$ZCANARY_ZALLET_PASSWORD"
-  ./scripts/regtest-init.sh --prepare-only >/dev/null 2>&1
+  run_with_tail "regtest-init --prepare-only" ./scripts/regtest-init.sh --prepare-only
   ZCANARY_ZALLET_VERSION=${ZCANARY_ZALLET_VERSION:-0.1.0-beta.1}
   case "$ZCANARY_ZALLET_VERSION" in
     0.1.0-beta.1) ;;
@@ -63,29 +69,23 @@ if version == "0.1.0-beta.3" and "allow_insecure_remote_bind" not in text:
     text = text.replace(needle, needle + "allow_insecure_remote_bind = true\n", 1)
 path.write_text(text, encoding="utf-8")
 PY
-  PULL_START=$(python3 -c 'import time; print(time.monotonic_ns())')
-  if ! $DC pull --ignore-buildable >/dev/null 2>&1; then
-    echo "pinned Z3 image pull failed" >&2
-    exit 1
-  fi
-  if ! docker pull 'busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662' >/dev/null 2>&1; then
-    echo "pinned regtest-init helper image pull failed" >&2
-    exit 1
-  fi
-  docker tag busybox:1.36.1 busybox:latest
-  PULL_END=$(python3 -c 'import time; print(time.monotonic_ns())')
+  COMPOSE_PULL_START=$(python3 -c 'import time; print(time.monotonic_ns())')
+  run_with_tail "pinned Z3 service images pull" $DC pull --ignore-buildable
+  COMPOSE_PULL_END=$(python3 -c 'import time; print(time.monotonic_ns())')
   if [ ! -f "$OUT/image-pull-timing.json" ]; then
-    python3 - "$PULL_START" "$PULL_END" "$OUT/image-pull-timing.json" <<'PY'
+    python3 - "$HELPER_PULL_START" "$HELPER_PULL_END" "$COMPOSE_PULL_START" "$COMPOSE_PULL_END" "$OUT/image-pull-timing.json" <<'PY'
 import json, sys
-start, end, path = sys.argv[1:]
-seconds = (int(end) - int(start)) / 1_000_000_000
+helper_start, helper_end, compose_start, compose_end, path = sys.argv[1:]
+seconds = (
+    int(helper_end) - int(helper_start) + int(compose_end) - int(compose_start)
+) / 1_000_000_000
 with open(path, "w", encoding="utf-8") as f:
-    json.dump({"pull_seconds": round(seconds, 3), "measurement": "first Compose service pull plus pinned regtest-init helper pull in this workspace"}, f, indent=2)
+    json.dump({"pull_seconds": round(seconds, 3), "measurement": "sum of pinned regtest-init helper and first Compose service pull durations in this workspace"}, f, indent=2)
     f.write("\n")
 PY
   fi
-  ./scripts/regtest-init.sh >/dev/null 2>&1
-  $DC up -d >/dev/null 2>&1
+  run_with_tail "regtest-init" ./scripts/regtest-init.sh
+  run_with_tail "start regtest services" $DC up -d
 fi
 $DC ps --format '{{.Service}} {{.Image}}' > "$OUT/images.txt"
 cd "$ROOT"

@@ -22,6 +22,29 @@ CASES = [
 ]
 
 
+def _process_diagnostic(label: str, proc: subprocess.CompletedProcess, env: dict[str, str]) -> str:
+    """Return a compact, redacted status and output tail safe for test failures."""
+    text = "\n".join(part for part in (proc.stdout, proc.stderr) if part)
+    for name, secret in env.items():
+        if secret and any(
+            marker in name.upper()
+            for marker in ("PASSWORD", "PASS", "TOKEN", "SECRET", "SEED", "PRIVATE_KEY", "MEMO")
+        ):
+            replacement = "<canary>" if "MEMO" in name.upper() else "<redacted>"
+            text = text.replace(secret, replacement)
+            encoded = secret.encode("utf-8").hex()
+            text = text.replace(encoded, replacement).replace(encoded.upper(), replacement)
+    text = re.sub(r"ZC-[MLT]-[A-F0-9]{24}", "<canary>", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"5a432d(?:4d|4c|54)2d(?:3[0-9]|4[1-6]){24}",
+        "<canary>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    tail = "\n".join(text.splitlines()[-20:]) or "(no captured output)"
+    return f"{label}: exit={proc.returncode}\n{tail}"
+
+
 @pytest.fixture(scope="module", autouse=True)
 def integration_preflight():
     if os.environ.get("ZCANARY_RUN_INTEGRATION") != "1":
@@ -45,29 +68,30 @@ def integration_preflight():
 @pytest.mark.parametrize("name,expected_failures", CASES, ids=[case[0] for case in CASES])
 def test_example_app_has_exact_expected_failed_checks(name: str, expected_failures: set[str]):
     cfg = ROOT / "examples" / "configs" / f"{name}.toml"
+    env = os.environ.copy()
     proc = subprocess.run(
         [sys.executable, "-m", "zcanary.cli", "run", "--config", str(cfg)],
         cwd=ROOT,
-        env=os.environ.copy(),
+        env=env,
         capture_output=True,
         text=True,
         timeout=1800,
         check=False,
     )
+    diagnostic = _process_diagnostic(f"{name} zcanary CLI", proc, env)
     report_path = ROOT / "out" / "reports" / f"{name}.json"
     assert report_path.exists(), (
-        f"{name}: zcanary did not produce a report (exit {proc.returncode}); "
-        "inspect the redacted CLI status lines, not raw app logs"
+        f"{name}: zcanary did not produce a report (exit {proc.returncode})\n{diagnostic}"
+    )
+    expected_exit = 0 if not expected_failures else 1
+    assert proc.returncode == expected_exit, (
+        f"{name}: expected CLI exit {expected_exit}, got {proc.returncode}\n{diagnostic}"
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
     failures = {item["id"] for item in report["checks"] if item["status"] == "fail"}
-    expected_exit = 0 if not expected_failures else 1
-    assert proc.returncode == expected_exit, (
-        f"{name}: expected CLI exit {expected_exit}, got {proc.returncode}; "
-        f"overall={report['overall']}, failures={sorted(failures)}"
-    )
     assert failures == expected_failures, (
-        f"{name}: expected failed checks {sorted(expected_failures)}, got {sorted(failures)}"
+        f"{name}: expected failed checks {sorted(expected_failures)}, got {sorted(failures)}\n"
+        f"{diagnostic}"
     )
     assert report["not_covered"] and any(
         "guarantee" in item.lower() for item in report["not_covered"]
@@ -108,7 +132,7 @@ def test_beta1_known_bad_fixture_accepts_exact_fullprivacy_cross_pool_call():
         capture_output=True, text=True, timeout=1800, check=False,
     )
     try:
-        assert prepare.returncode == 0, "beta.1 regtest preparation failed; see CI step status (raw output suppressed)"
+        assert prepare.returncode == 0, _process_diagnostic("beta.1 prepare-regtest", prepare, env)
         result = subprocess.run(
             [sys.executable, "scripts/reproduce_fullprivacy_crosspool.py"],
             cwd=ROOT, env=env, capture_output=True, text=True, timeout=300, check=False,
@@ -143,7 +167,7 @@ def test_beta3_rejects_exact_fullprivacy_ironwood_to_sapling_call():
         capture_output=True, text=True, timeout=1800, check=False,
     )
     try:
-        assert prepare.returncode == 0, "beta.3 regtest preparation failed; see CI step status (raw output suppressed)"
+        assert prepare.returncode == 0, _process_diagnostic("beta.3 prepare-regtest", prepare, env)
         result = subprocess.run(
             [sys.executable, "scripts/reproduce_fullprivacy_crosspool.py"],
             cwd=ROOT, env=env, capture_output=True, text=True, timeout=300, check=False,
