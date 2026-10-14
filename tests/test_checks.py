@@ -111,6 +111,24 @@ def test_c3_not_run():
     assert checks.c3(None).status == NOT_RUN
 
 
+@pytest.mark.parametrize("case", ["future_top_level", "future_shielded_bundle", "future_ironwood_member"])
+def test_checks_fail_closed_on_unrecognised_transaction_format(fx, case):
+    raw = fx("spike/rawtx.json")
+    if case == "future_top_level":
+        raw["futureTxFlag"] = True
+    elif case == "future_shielded_bundle":
+        raw["futureShieldedPool"] = {"actions": [], "valueBalanceZat": -1}
+    else:
+        raw["ironwood"]["futureShieldedValueZat"] = -1
+
+    summary = tx.classify(raw)
+    assert summary.unknown_keys
+    results = [checks.c3(summary), checks.c4(summary, "any-shielded"), checks.c4b(summary)]
+    for result in results:
+        assert result.status in (FAIL, NOT_RUN)
+        assert "unrecognised transaction format; cannot verify" in result.message
+
+
 # ---------- C4
 @pytest.mark.parametrize("case", ["a_orchard_only", "b_unified"])
 def test_c4_real_payments_use_ironwood(fx, case):
