@@ -1,6 +1,6 @@
 # Historical Phase 1 spike: beta.1 baseline (2026-10-13)
 
-This records the earlier runtime run. It is not the current default image pin; see [version-matrix.md](version-matrix.md) for current beta.3 source/runtime status. The old outputs are regression fixtures, not evidence that beta.3 was runtime-tested.
+This records the earlier runtime run. The repository keeps beta.1 as the default until beta.3 passes the full runtime suite; see [version-matrix.md](version-matrix.md) for the source/runtime evidence split. The old outputs are regression fixtures, not evidence that beta.3 was runtime-tested.
 
 ## Pinned versions at the time of this run
 | Component | Tag | Digest |

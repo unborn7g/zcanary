@@ -11,7 +11,7 @@ Checks include:
 - **MEMO:** the recipient wallet decrypts the unique per-run memo marker.
 - **C6:** unique memo, label, and test-id markers are searched in configured captured logs/artifacts. Reports include labels, counts, and source names only.
 
-The canary scan is bounded to sources the run actually captures. It is not a guarantee against other leaks, and each report includes a **NOT COVERED** section. Pool behavior is version-specific; see [`docs/version-matrix.md`](docs/version-matrix.md). The default Zallet beta.3 pin is source/release-note supported but must not be described as runtime-verified until the Docker integration job succeeds.
+The canary scan is bounded to sources the run actually captures. It is not a guarantee against other leaks, and each report includes a **NOT COVERED** section. Pool behavior is version-specific; see [`docs/version-matrix.md`](docs/version-matrix.md). The default remains the historically runtime-tested Zallet beta.1 baseline until beta.3 passes the complete Docker integration suite.
 
 ## Safety
 

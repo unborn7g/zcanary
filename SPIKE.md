@@ -1,7 +1,7 @@
 # Historical Phase 1 spike (Gate 1, beta.1 baseline)
 
 **Historical result: Gate 1 PASS**, 2026-10-13 (Lagos time), on a Debian 13 x86_64 box with Docker 29.9.0 and Compose v5.6.0. This records the beta.1 run, not runtime evidence for the current beta.3 default; see `docs/version-matrix.md`.
-The historical beta.1 version of `scripts/spike.sh` completed the flow in about 100 s. The current script defaults to beta.3 and has not yet been runtime-tested in this workspace.
+The historical beta.1 version of `scripts/spike.sh` completed the flow in about 100 s. The current script keeps beta.1 as its default until beta.3 passes the complete runtime suite; neither the current script revision nor the beta.3 profile has yet been runtime-tested in this workspace.
 
 ## Pinned versions
 | Component | Version |
