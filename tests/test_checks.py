@@ -136,14 +136,22 @@ def test_c4_fail_no_shielded():
 
 # ---------- C4b
 def test_c4b_pass_fee_only(fx):
-    r = checks.c4b(tx.classify(fx("spike/rawtx.json")), pools.block_deltas(fx("spike/block.json")))
+    deltas = pools.block_deltas(fx("spike/block.json"))
+    # The block pool delta is negative by exactly the fee for a same-pool send;
+    # attribution comes from the decoded tx valueBalance, not that aggregate sign.
+    assert deltas["ironwood"] == -25000
+    r = checks.c4b(tx.classify(fx("spike/rawtx.json")), deltas)
     assert r.status == PASS
+    assert r.evidence["positive_pools"] == {"ironwood": 25000}
+    assert r.evidence["negative_pools"] == {}
 
 
 def test_c4b_fail_real_cross_pool(fx):
     r = checks.c4b(tx.classify(fx("pools/c_sapling_rawtx.json")), pools.block_deltas(fx("pools/c_sapling_block.json")))
     assert_shape(r)
     assert r.status == FAIL and r.evidence["crossed_zat"] == 10000000
+    assert r.evidence["negative_pools"] == {"sapling": -10000000}
+    assert r.evidence["positive_pools"] == {"ironwood": 10020000}
 
 
 def test_c4b_fail_synthetic_cross_pool(fx):
@@ -215,6 +223,8 @@ def test_c4b_reports_derived_fee(fx):
 def test_c4b_fail_deshield_larger_than_fee(fx):
     r = checks.c4b(tx.classify(fx("synthetic/tx_deshield_gt_fee.json"))); assert_shape(r)
     assert r.status == FAIL and r.evidence["fee_zat"] == 30000 and "transparent" in r.message
+    assert r.evidence["transparent_out_zat"] > r.evidence["fee_zat"]
+    assert r.evidence["zip317_fee_zat"] == 30000
 
 
 def test_c4b_fail_cross_pool_any_negative(fx):

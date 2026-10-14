@@ -57,9 +57,13 @@ def zip317_fee(tx: TxSummary) -> int:
 
 
 def check_crossing(tx: TxSummary | None, block_deltas: dict[str, int] | None = None) -> CheckResult:
-    """Fee = sum(transparent in) - sum(transparent out) + sum(shielded valueBalances).
-    FAIL if any shielded valueBalance is negative (value entered that pool), or, with no transparent legs,
-    if the shielded balances do not sum to the ZIP-317 fee."""
+    """Check per-transaction pool effects against the transaction-derived ZIP-317 fee.
+
+    Positive `valueBalanceZat` means value leaves a shielded pool; negative means it
+    enters one. A negative recipient-pool valueBalance is a shielded-pool crossing only
+    when positive valueBalance identifies a shielded source pool. Block `valueDeltaZat`
+    has the opposite sign and is retained as a cross-check, not used for attribution.
+    """
     cid = "C4b"
     if tx is None:
         return not_run(cid, "no decoded transaction")
@@ -71,15 +75,12 @@ def check_crossing(tx: TxSummary | None, block_deltas: dict[str, int] | None = N
     pos = {p: v for p, v in vb.items() if v > 0}
     ev = {"value_balance_zat": vb, "fee_zat": fee, "zip317_fee_zat": z,
           "transparent_in_zat": tx.transparent_in_zat, "transparent_out_zat": tx.transparent_out_zat,
-          "negative_pools": neg, **_block_note(tx, block_deltas)}
-    if neg:
-        crossed = min(sum(-v for v in neg.values()), sum(pos.values())) if pos else 0
+          "negative_pools": neg, "positive_pools": pos, **_block_note(tx, block_deltas)}
+    if neg and pos:
+        crossed = min(sum(-v for v in neg.values()), sum(pos.values()))
         ev["crossed_zat"] = crossed
-        src = f" from {sorted(pos)}" if pos else ""
-        if not pos and tx.transparent_in:
-            src = " from transparent inputs (see C3)"
-        return CheckResult(cid, FAIL, f"negative shielded valueBalance {neg}: {sum(-v for v in neg.values())} zat "
-                                      f"entered {sorted(neg)}{src}; amount is public", ev,
+        return CheckResult(cid, FAIL, f"negative shielded valueBalance {neg}: {crossed} zat entered "
+                                      f"{sorted(neg)} from positive source pool(s) {sorted(pos)}; amount is public", ev,
                            "Pay a receiver in the same pool as the sender's notes, or migrate funds deliberately.")
     if len(pos) > 1:
         return CheckResult(cid, FAIL, f"value left multiple shielded pools: {pos}", ev, "Spend from a single pool.")
