@@ -27,19 +27,27 @@ def test_child_command_output_is_captured_not_displayed(tmp_path, capsys):
     assert "app.logs[1]: ok" in terminal
 
 
-def test_network_start_streams_timestamped_progress_but_not_raw_child_output(tmp_path, capsys):
+def test_network_start_streams_only_redacted_timestamped_progress(tmp_path, capsys):
     child_marker = "private-network-start-output"
+    secret = "network-start-unit-password-not-a-secret"
+    env = os.environ.copy()
+    env["ZCANARY_ZALLET_PASSWORD"] = secret
     command = (
-        "printf '[2030-01-01T00:00:00Z] [ZCANARY-PROGRESS] phase=mining\\n'; "
+        "printf '[2030-01-01T00:00:00Z] [ZCANARY-PROGRESS] phase=mining password=%s\\n' "
+        "\"$ZCANARY_ZALLET_PASSWORD\"; "
         f"printf '{child_marker}\\n'"
     )
-    step, sources = _run_command("network.start", command, tmp_path, os.environ.copy(), 5)
+    step, sources = _run_command("network.start", command, tmp_path, env, 5)
     terminal = capsys.readouterr().out
 
     assert step["status"] == "ok"
     assert re.search(r"\[\d{4}-\d{2}-\d{2}T[^]]+Z\] \[ZCANARY-PROGRESS\]", terminal)
     assert "phase=mining" in terminal
+    assert "phase=start name=network-start" in terminal
+    assert "phase=complete name=network-start status=ok" in terminal
+    assert "<redacted>" in terminal and secret not in terminal
     assert child_marker not in terminal
+    assert secret in sources["network.start.stdout"]
     assert child_marker in sources["network.start.stdout"]
 
 
@@ -97,7 +105,47 @@ markdown_path = "../../out/reports/failed-start.md"
     assert "private-start-output" not in contents
     assert "docker compose ps -a" in contents
     for service in ("zebra", "zallet", "rpc-router"):
-        assert f"docker compose logs --no-color --tail 80 {service}" in contents
+        assert f"docker compose --env-file .env.regtest logs --no-color --tail 80 {service}" in contents
+
+
+def test_cli_operational_failure_also_collects_compose_diagnostics(tmp_path, capsys):
+    config_dir = tmp_path / "examples" / "configs"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "failed-pay.toml"
+    config_path.write_text(
+        '''[network]
+name = "regtest"
+timeout_s = 0.1
+command_timeout_s = 5
+
+[network.zebra]
+url = "http://127.0.0.1:9"
+user = "zebra"
+
+[network.zallet]
+url = "http://127.0.0.1:9"
+user = "zebra"
+
+[app]
+pay = "false"
+result_file = "../../out/result.json"
+amount = "0.5"
+
+[report]
+path = "../../out/reports/failed-pay.json"
+markdown_path = "../../out/reports/failed-pay.md"
+''',
+        encoding="utf-8",
+    )
+
+    assert cli_module.run(str(config_path)) == EXIT_ERROR
+    capsys.readouterr()
+
+    diagnostics = tmp_path / "out" / "diagnostics" / "wallet-startup.log"
+    contents = diagnostics.read_text(encoding="utf-8")
+    assert "docker compose ps -a" in contents
+    for service in ("zebra", "zallet", "rpc-router"):
+        assert f"docker compose --env-file .env.regtest logs --no-color --tail 80 {service}" in contents
 
 
 def test_report_markdown_contains_not_covered_and_selfscan_is_marker_aware():

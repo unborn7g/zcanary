@@ -57,6 +57,9 @@ def test_ci_integration_is_bounded_live_and_report_upload_is_scan_gated():
     assert 'python -u -m pytest -v -s -x -m integration --durations=0' in workflow
     assert "id: artifact_scan" in workflow
     assert "if: always() && steps.artifact_scan.outcome == 'success'" in workflow
+    assert "Capture redacted Compose diagnostics after failure" in workflow
+    assert "if: failure()" in workflow
+    assert "scripts/capture-regtest-diagnostics.sh" in workflow
     assert "Upload redacted wallet startup diagnostics" in workflow
     diagnostics_step = workflow.split("name: Upload redacted wallet startup diagnostics", 1)[1]
     assert "if: always()" in diagnostics_step.split("uses:", 1)[0]
@@ -77,6 +80,8 @@ def test_integration_subprocess_timeout_is_redacted_with_elapsed_seconds(tmp_pat
     password = "timeout-unit-password-not-a-secret"
     env = os.environ.copy()
     env["ZCANARY_ZALLET_PASSWORD"] = password
+    diagnostics = tmp_path / "timeout-wallet-startup.log"
+    env["ZCANARY_DIAGNOSTICS_FILE"] = str(diagnostics)
     command = [
         sys.executable,
         "-c",
@@ -99,12 +104,18 @@ def test_integration_subprocess_timeout_is_redacted_with_elapsed_seconds(tmp_pat
     assert "timed out after" in message and "seconds" in message
     assert "phase=wait" in message
     assert "<redacted>" in message and password not in message
+    assert password not in diagnostics.read_text(encoding="utf-8")
+    diagnostic_artifact = diagnostics.read_text(encoding="utf-8")
+    assert "docker compose ps -a" in diagnostic_artifact
+    for service in ("zebra", "zallet", "rpc-router"):
+        assert f"--tail 80 {service}" in diagnostic_artifact
     assert "phase=wait" in capsys.readouterr().out
 
 
 def test_spike_has_timestamped_progress_for_slow_phases():
     script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
     assert "[ZCANARY-PROGRESS]" in script and "date -u" in script
+    assert 'progress "phase=start name=$ACTIVE_PHASE"' in script
     assert 'progress "phase=complete name=$completed_phase"' in script
     for phase in (
         "z3-checkout",
@@ -116,11 +127,13 @@ def test_spike_has_timestamped_progress_for_slow_phases():
         "send-payment",
         "wait-operation-result",
     ):
-        assert f"phase=start name={phase}" in script
+        assert f'begin_phase "{phase}"' in script
         if phase in ("wallet-rpc-wait", "wait-operation-result"):
             assert f"phase=complete name={phase}" in script
         else:
             assert f'complete_phase "{phase}"' in script
+    assert "phase=start name=z_sendmany-submission" in script
+    assert "phase=complete name=z_sendmany-submission" in script
 
 
 def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
@@ -131,6 +144,8 @@ def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     assert "getwalletinfo" not in script
     assert "WALLET_RPC_READY=1" in script
     assert script.count("capture_wallet_startup_diagnostics") >= 2
+    assert "trap on_exit EXIT" in script
+    assert 'progress "phase=failed name=${ACTIVE_PHASE:-unknown} exit=$status"' in script
     timeout_branch = script.split('if [ "$WAIT_READY" -eq 1 ]; then', 1)[1].split("# --- 2. accounts", 1)[0]
     assert "capture_wallet_startup_diagnostics" in timeout_branch
     assert "wallet RPC ready after" in script
@@ -333,7 +348,8 @@ def test_failure_diagnostics_collector_runs_all_compose_commands_and_redacts(tmp
     rendered = diagnostics.read_text(encoding="utf-8")
 
     assert proc.returncode == 0
-    assert "docker compose --env-file .env.regtest ps -a" in rendered
+    assert "docker compose ps -a" in rendered
+    assert "fake docker args: compose --env-file .env.regtest ps -a" in rendered
     for service in ("zebra", "zallet", "rpc-router"):
         assert f"docker compose --env-file .env.regtest logs --no-color --tail 80 {service}" in rendered
         assert f"fake docker args: compose --env-file .env.regtest logs --no-color --tail 80 {service}" in rendered

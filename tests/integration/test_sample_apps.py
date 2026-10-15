@@ -58,6 +58,97 @@ def _process_diagnostic(label: str, proc: subprocess.CompletedProcess, env: dict
     return f"{label}: exit={proc.returncode}\n{tail}"
 
 
+def _process_descendants(root_pid: int) -> list[int]:
+    """Find children across nested process groups on Linux CI runners."""
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return []
+    children: dict[int, list[int]] = {}
+    try:
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text(encoding="utf-8")
+                fields = stat[stat.rfind(")") + 1 :].split()
+                parent_pid = int(fields[1])
+                children.setdefault(parent_pid, []).append(int(entry.name))
+            except (OSError, IndexError, ValueError):
+                continue
+    except OSError:
+        return []
+    descendants: list[int] = []
+    pending = list(children.get(root_pid, ()))
+    while pending:
+        pid = pending.pop()
+        descendants.append(pid)
+        pending.extend(children.get(pid, ()))
+    return descendants
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    if os.name != "posix":
+        proc.kill()
+        return
+    for pid in reversed(_process_descendants(proc.pid)):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    if proc.poll() is None:
+        proc.kill()
+
+
+def _collect_timeout_diagnostics(env: dict[str, str]) -> None:
+    """Preserve Compose diagnostics even if a timeout has to kill the CLI tree."""
+    default_path = ROOT / "out" / "diagnostics" / "wallet-startup.log"
+    output_path = Path(env.get("ZCANARY_DIAGNOSTICS_FILE") or default_path).resolve()
+    expected = (
+        "docker compose ps -a",
+        *(
+            f"docker compose --env-file .env.regtest logs --no-color --tail 80 {service}"
+            for service in ("zebra", "zallet", "rpc-router")
+        ),
+    )
+    try:
+        existing = output_path.read_text(encoding="utf-8", errors="replace") if output_path.is_file() else ""
+    except OSError:
+        existing = ""
+    if all(label in existing for label in expected):
+        return
+    collector = ROOT / "scripts" / "capture-regtest-diagnostics.sh"
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["bash", str(collector), str(output_path), str(ROOT / "z3")],
+            cwd=ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        rendered = output_path.read_text(encoding="utf-8", errors="replace") if output_path.is_file() else ""
+        missing = [label for label in expected if label not in rendered]
+        if missing:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("a", encoding="utf-8") as diagnostics:
+                for label in missing:
+                    diagnostics.write(f"==> {label} (diagnostic collection unavailable)\n")
+    except OSError:
+        pass
+
+
 def _run_process_with_timeout(
     label: str,
     command: list[str],
@@ -66,6 +157,7 @@ def _run_process_with_timeout(
     env: dict[str, str],
     timeout_s: float,
     progress_only: bool = False,
+    stop_regtest_on_timeout: bool = False,
 ) -> subprocess.CompletedProcess:
     """Capture all output, optionally stream only timestamped sanitized progress lines."""
     started = time.monotonic()
@@ -101,15 +193,9 @@ def _run_process_with_timeout(
         selector.register(proc.stdout, selectors.EVENT_READ)
         while selector.get_map():
             now = time.monotonic()
-            if not timed_out and now >= deadline and proc.poll() is None:
+            if not timed_out and now >= deadline and selector.get_map():
                 timed_out = True
-                if os.name == "posix":
-                    try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                else:
-                    proc.kill()
+                _kill_process_tree(proc)
             wait_s = 0.1 if timed_out or proc.poll() is not None else max(0.0, min(0.1, deadline - now))
             for key, _ in selector.select(wait_s):
                 try:
@@ -135,6 +221,21 @@ def _run_process_with_timeout(
     stdout = captured.decode("utf-8", errors="replace")
     completed = subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr="")
     if timed_out:
+        _collect_timeout_diagnostics(env)
+        if stop_regtest_on_timeout:
+            try:
+                subprocess.run(
+                    ["bash", "scripts/stop-regtest.sh"],
+                    cwd=ROOT,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=300,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         detail = _process_diagnostic(label, completed, env)
         pytest.fail(
             f"{label} timed out after {elapsed:.2f} seconds "
@@ -175,6 +276,7 @@ def test_example_app_has_exact_expected_failed_checks(name: str, expected_failur
         env=env,
         timeout_s=CLI_SUBPROCESS_TIMEOUT_S,
         progress_only=True,
+        stop_regtest_on_timeout=True,
     )
     diagnostic = _process_diagnostic(f"{name} zcanary CLI", proc, env)
     report_path = ROOT / "out" / "reports" / f"{name}.json"
@@ -225,15 +327,15 @@ def test_beta1_known_bad_fixture_accepts_exact_fullprivacy_cross_pool_call():
             "ZCANARY_CONTEXT_FILE": str(ROOT / "out" / "context.json"),
         }
     )
-    prepare = _run_process_with_timeout(
-        "beta.1 prepare-regtest",
-        ["bash", "scripts/prepare-regtest.sh"],
-        cwd=ROOT,
-        env=env,
-        timeout_s=PREPARE_SUBPROCESS_TIMEOUT_S,
-        progress_only=True,
-    )
     try:
+        prepare = _run_process_with_timeout(
+            "beta.1 prepare-regtest",
+            ["bash", "scripts/prepare-regtest.sh"],
+            cwd=ROOT,
+            env=env,
+            timeout_s=PREPARE_SUBPROCESS_TIMEOUT_S,
+            progress_only=True,
+        )
         assert prepare.returncode == 0, _process_diagnostic("beta.1 prepare-regtest", prepare, env)
         result = subprocess.run(
             [sys.executable, "scripts/reproduce_fullprivacy_crosspool.py"],
@@ -264,15 +366,15 @@ def test_beta3_rejects_exact_fullprivacy_ironwood_to_sapling_call():
             "ZCANARY_CONTEXT_FILE": str(ROOT / "out" / "context.json"),
         }
     )
-    prepare = _run_process_with_timeout(
-        "beta.3 prepare-regtest",
-        ["bash", "scripts/prepare-regtest.sh"],
-        cwd=ROOT,
-        env=env,
-        timeout_s=PREPARE_SUBPROCESS_TIMEOUT_S,
-        progress_only=True,
-    )
     try:
+        prepare = _run_process_with_timeout(
+            "beta.3 prepare-regtest",
+            ["bash", "scripts/prepare-regtest.sh"],
+            cwd=ROOT,
+            env=env,
+            timeout_s=PREPARE_SUBPROCESS_TIMEOUT_S,
+            progress_only=True,
+        )
         assert prepare.returncode == 0, _process_diagnostic("beta.3 prepare-regtest", prepare, env)
         result = subprocess.run(
             [sys.executable, "scripts/reproduce_fullprivacy_crosspool.py"],
