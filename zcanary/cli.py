@@ -84,6 +84,22 @@ def _try(fn, *args):
         return None, str(e)
 
 
+def _write_network_start_diagnostics(path: Path, step: dict[str, Any]) -> None:
+    """Ensure failed network startup always leaves a safe artifact for CI."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    has_redacted_details = path.is_file() and path.stat().st_size > 0
+    with path.open("a", encoding="utf-8") as diagnostics:
+        if not has_redacted_details:
+            diagnostics.write(
+                "No redacted container diagnostics were emitted by the network start command.\n"
+            )
+        diagnostics.write("\n==> zcanary network.start failed ==\n")
+        diagnostics.write(
+            f"status={step.get('status', 'unknown')} "
+            f"exit_code={step.get('exit_code')} seconds={step.get('seconds')}\n"
+        )
+
+
 def _read_json(path: Path) -> tuple[dict[str, Any] | None, str | None, str | None]:
     try:
         raw = path.read_text(encoding="utf-8")
@@ -213,6 +229,7 @@ def run(cfg_path: str) -> int:
     report_path = (base / cfg.report_path).resolve()
     markdown_path = (base / cfg.markdown_path).resolve()
     result_path = (base / cfg.result_file).resolve()
+    startup_diagnostics_path = result_path.parent / "diagnostics" / "wallet-startup.log"
     context_path = (base / cfg.context_file).resolve() if cfg.context_file else None
     report_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,6 +267,12 @@ def run(cfg_path: str) -> int:
             network_started = steps["network.start"]["status"] == "ok"
             if not network_started:
                 execution_errors.append("network start command did not complete successfully")
+                try:
+                    _write_network_start_diagnostics(
+                        startup_diagnostics_path, steps["network.start"]
+                    )
+                except OSError:
+                    execution_errors.append("could not write wallet startup diagnostics artifact")
         else:
             steps["network.start"] = {"status": "skipped", "reason": "no command configured"}
             network_started = True  # caller may provide an already-running disposable regtest

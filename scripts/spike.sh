@@ -24,8 +24,15 @@ ZEBRA=${ZCANARY_NODE_RPC:-http://127.0.0.1:29232}      # direct Zebra RPC
 : "${ZCANARY_NODE_PASSWORD:?set ZCANARY_NODE_PASSWORD in the environment}"
 rpc_node() { RPC_USER="$ZCANARY_NODE_USER" RPC_PASS="$ZCANARY_NODE_PASSWORD" "$RPC" "$ZEBRA" "$@"; }
 j() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
-source "$ROOT/scripts/lib/wallet_rpc.sh"
 log() { echo "==> $*"; }
+capture_wallet_startup_diagnostics() {
+  mkdir -p "$(dirname "$STARTUP_DIAGNOSTICS")"
+  append_redacted_tail "$STARTUP_DIAGNOSTICS" "docker compose --env-file .env.regtest ps -a" "$ROOT/z3" docker compose --env-file .env.regtest ps -a
+  for service in zebra zallet rpc-router; do
+    append_redacted_tail "$STARTUP_DIAGNOSTICS" "docker compose --env-file .env.regtest logs --no-color --tail 40 $service" "$ROOT/z3" docker compose --env-file .env.regtest logs --no-color --tail 40 "$service"
+  done
+}
+source "$ROOT/scripts/lib/wallet_rpc.sh"
 
 # --- 0. host workaround: on this box Docker's legacy iptables FORWARD=DROP blocked
 # container<->container traffic on compose bridges. Disabling br_netfilter fixes it.
@@ -97,10 +104,12 @@ WAIT_INTERVAL=3
 WAIT_START=$(date +%s)
 WAIT_READY=0
 ROUTER_RESTARTED=0
+WALLET_RPC_READY=0
 log "waiting for router + wallet (budget ${WAIT_ATTEMPTS} x ${WAIT_INTERVAL}s)"
 for i in $(seq "$WAIT_ATTEMPTS"); do
-  if rpc_wallet getwalletinfo 2>/dev/null | grep -q '\"result\"'; then
+  if wallet_accounts_ready 2>/dev/null; then
     WAIT_READY=1
+    WALLET_RPC_READY=1
     break
   fi
   if [ "$i" -eq 20 ] && [ "$ROUTER_RESTARTED" -eq 0 ]; then
@@ -118,11 +127,7 @@ WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
 if [ "$WAIT_READY" -eq 1 ]; then
   log "wallet RPC ready after ${WAIT_ELAPSED}s"
 else
-  mkdir -p "$(dirname "$STARTUP_DIAGNOSTICS")"
-  append_redacted_tail "$STARTUP_DIAGNOSTICS" "docker compose --env-file .env.regtest ps -a" "$ROOT/z3" docker compose --env-file .env.regtest ps -a
-  for service in zebra zallet rpc-router; do
-    append_redacted_tail "$STARTUP_DIAGNOSTICS" "docker compose --env-file .env.regtest logs --no-color --tail 40 $service" "$ROOT/z3" docker compose --env-file .env.regtest logs --no-color --tail 40 "$service"
-  done
+  capture_wallet_startup_diagnostics
   printf 'wallet RPC not ready after %s s\n' "$WAIT_ELAPSED" >&2
   exit 1
 fi

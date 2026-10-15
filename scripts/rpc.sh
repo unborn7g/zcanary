@@ -16,7 +16,24 @@ PY
 rpc_user=${RPC_USER//\\/\\\\}; rpc_user=${rpc_user//\"/\\\"}
 rpc_pass=${RPC_PASS//\\/\\\\}; rpc_pass=${rpc_pass//\"/\\\"}
 # Supply curl authentication via a process-substitution config so the password is not
-# included in curl's command-line arguments. The RPC response is returned to the caller.
-curl --silent --show-error --fail \
+# included in curl's command-line arguments. Keep the body out of stdout until the
+# response status is known so a non-200 body cannot be mistaken for a JSON-RPC result.
+response_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-rpc.XXXXXX")
+trap 'rm -f "$response_file"' EXIT
+if http_status=$(curl --silent --show-error --fail \
+  --output "$response_file" --write-out '%{http_code}' \
   --config <(printf 'user = "%s:%s"\n' "$rpc_user" "$rpc_pass") \
-  -X POST -H 'Content-Type: application/json' -d "$body" "$url"
+  -X POST -H 'Content-Type: application/json' -d "$body" "$url"); then
+  :
+else
+  status=$?
+  if [ -n "${http_status:-}" ]; then
+    printf 'RPC HTTP request expected HTTP 200 (received %s; curl exit %s)\n' "$http_status" "$status" >&2
+  fi
+  exit "$status"
+fi
+if [ "$http_status" != 200 ]; then
+  printf 'RPC HTTP request expected HTTP 200, received %s\n' "$http_status" >&2
+  exit 22
+fi
+cat "$response_file"

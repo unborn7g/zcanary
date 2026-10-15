@@ -11,6 +11,9 @@ rpc_wallet() {
     else
       printf 'wallet RPC %s failed (exit %s)\n' "$method" "$status" >&2
     fi
+    if [ "${WALLET_RPC_READY:-0}" = 1 ] && declare -F capture_wallet_startup_diagnostics >/dev/null; then
+      capture_wallet_startup_diagnostics
+    fi
     return "$status"
   fi
 }
@@ -20,6 +23,22 @@ rpc_wallet_j() {
   shift
   if response=$(rpc_wallet "$@"); then
     printf '%s\n' "$response" | j "$expression"
+  else
+    status=$?
+    return "$status"
+  fi
+}
+
+wallet_accounts_ready() {
+  local response status
+  if response=$(rpc_wallet z_listaccounts); then
+    printf '%s\n' "$response" | python3 -c 'import json,sys
+try:
+    payload=json.load(sys.stdin)
+except (json.JSONDecodeError, UnicodeDecodeError):
+    sys.exit(1)
+if not isinstance(payload, dict) or "error" not in payload or payload["error"] is not None or not isinstance(payload.get("result"), list):
+    sys.exit(1)'
   else
     status=$?
     return "$status"
