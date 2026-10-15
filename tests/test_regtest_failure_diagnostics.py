@@ -4,6 +4,8 @@ import importlib.util
 import os
 import re
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,6 +52,10 @@ def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
 
     assert re.search(r"\bWAIT_ATTEMPTS=120\b", script)
+    assert "wallet_accounts_ready" in script
+    assert "getwalletinfo" not in script
+    assert "WALLET_RPC_READY=1" in script
+    assert "capture_wallet_startup_diagnostics" in script
     assert "wallet RPC ready after" in script
     assert "wallet RPC not ready after" in script
     assert script.count("restart rpc-router") == 1
@@ -57,6 +63,73 @@ def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     assert 'docker compose --env-file .env.regtest logs --no-color --tail 40' in script
     assert "for service in zebra zallet rpc-router" in script
     assert "append_redacted_tail" in script
+
+
+def test_wallet_accounts_readiness_requires_null_error_and_list_result(tmp_path):
+    helper = ROOT / "scripts" / "lib" / "wallet_rpc.sh"
+    fake_rpc = tmp_path / "fake-rpc.sh"
+    fake_rpc.write_text(
+        """#!/usr/bin/env bash
+printf '%s' "$FAKE_RPC_BODY"
+""",
+        encoding="utf-8",
+    )
+    fake_rpc.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "RPC": str(fake_rpc),
+            "ROUTER": "http://127.0.0.1:8181",
+            "ZCANARY_ZALLET_USER": "unit-user",
+            "ZCANARY_ZALLET_PASSWORD": "unit-test-password-not-a-secret",
+        }
+    )
+    command = ["bash", "-c", 'source "$1"; wallet_accounts_ready', "bash", str(helper)]
+
+    env["FAKE_RPC_BODY"] = '{"error":null,"result":[]}'
+    assert subprocess.run(command, cwd=ROOT, env=env, capture_output=True).returncode == 0
+    env["FAKE_RPC_BODY"] = '{"error":{"code":-1},"result":[]}'
+    assert subprocess.run(command, cwd=ROOT, env=env, capture_output=True).returncode == 1
+    env["FAKE_RPC_BODY"] = '{"error":null,"result":{}}'
+    assert subprocess.run(command, cwd=ROOT, env=env, capture_output=True).returncode == 1
+    env["FAKE_RPC_BODY"] = "not-json"
+    assert subprocess.run(command, cwd=ROOT, env=env, capture_output=True).returncode == 1
+
+
+def test_rpc_script_rejects_non_200_even_with_a_ready_json_body():
+    class CreatedHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = b'{"error":null,"result":[]}'
+            self.send_response(201)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), CreatedHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    env = os.environ.copy()
+    env.update({"RPC_USER": "unit-user", "RPC_PASS": "unit-test-password-not-a-secret"})
+    try:
+        proc = subprocess.run(
+            ["bash", str(ROOT / "scripts" / "rpc.sh"), f"http://127.0.0.1:{server.server_port}", "z_listaccounts"],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+    assert proc.returncode == 22
+    assert proc.stdout == ""
+    assert "expected HTTP 200" in proc.stderr
 
 
 def test_rpc_wallet_http_error_is_readable_and_skips_json_parser(tmp_path):
@@ -80,10 +153,12 @@ def test_rpc_wallet_http_error_is_readable_and_skips_json_parser(tmp_path):
             "ROUTER": "http://127.0.0.1:8181",
             "ZCANARY_ZALLET_USER": "unit-user",
             "ZCANARY_ZALLET_PASSWORD": "unit-test-password-not-a-secret",
+            "WALLET_RPC_READY": "1",
+            "DIAG_TRACE": str(tmp_path / "diagnostic-calls.txt"),
         }
     )
     proc = subprocess.run(
-        ["bash", "-c", 'source "$1"; j() { echo JSON_PARSER_CALLED >&2; return 99; }; rpc_wallet_j ignored getwalletinfo',
+        ["bash", "-c", 'source "$1"; capture_wallet_startup_diagnostics() { printf "captured\\n" >> "$DIAG_TRACE"; }; j() { echo JSON_PARSER_CALLED >&2; return 99; }; rpc_wallet_j ignored getwalletinfo',
          "bash", str(helper)],
         cwd=ROOT,
         env=env,
@@ -97,6 +172,7 @@ def test_rpc_wallet_http_error_is_readable_and_skips_json_parser(tmp_path):
     assert "curl: (22)" in proc.stderr
     assert "JSON_PARSER_CALLED" not in proc.stderr
     assert env["ZCANARY_ZALLET_PASSWORD"] not in proc.stderr
+    assert (tmp_path / "diagnostic-calls.txt").read_text(encoding="utf-8") == "captured\n"
 
 
 def test_append_redacted_tail_sanitizes_addresses_hashes_and_keeps_40_lines(tmp_path):

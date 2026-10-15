@@ -1,8 +1,9 @@
 import os
 from pathlib import Path
 
+from zcanary import cli as cli_module
 from zcanary.canaries import CanarySet
-from zcanary.cli import NOT_COVERED, _contains_marker, _env_for_run, _markdown, _run_command
+from zcanary.cli import EXIT_ERROR, NOT_COVERED, _contains_marker, _env_for_run, _markdown, _run_command
 from zcanary.config import parse
 
 
@@ -36,6 +37,47 @@ def test_run_environment_contains_canaries_and_uses_password_env(monkeypatch, tm
     assert env["ZCANARY_AMOUNT"] == "0.5"
     assert env["ZCANARY_MEMO"] == canaries.memo
     assert canaries.label not in str(cfg)
+
+
+def test_cli_network_start_failure_creates_wallet_diagnostics_artifact(tmp_path, monkeypatch, capsys):
+    config_dir = tmp_path / "examples" / "configs"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "failed-start.toml"
+    config_path.write_text(
+        '''[network]
+name = "regtest"
+timeout_s = 0.1
+command_timeout_s = 5
+start_command = "printf private-start-output; exit 7"
+
+[network.zebra]
+url = "http://127.0.0.1:9"
+
+[network.zallet]
+url = "http://127.0.0.1:9"
+
+[app]
+pay = "true"
+result_file = "../../out/result.json"
+amount = "0.5"
+
+[report]
+path = "../../out/reports/failed-start.json"
+markdown_path = "../../out/reports/failed-start.md"
+''',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_module, "_try", lambda *_args: (None, "offline"))
+
+    assert cli_module.run(str(config_path)) == EXIT_ERROR
+    capsys.readouterr()
+
+    diagnostics = tmp_path / "out" / "diagnostics" / "wallet-startup.log"
+    assert diagnostics.is_file()
+    contents = diagnostics.read_text(encoding="utf-8")
+    assert "network.start failed" in contents
+    assert "exit_code=7" in contents
+    assert "private-start-output" not in contents
 
 
 def test_report_markdown_contains_not_covered_and_selfscan_is_marker_aware():
