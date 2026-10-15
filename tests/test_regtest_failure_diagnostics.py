@@ -60,6 +60,10 @@ def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
 
 
 def test_rpc_wallet_http_error_is_readable_and_skips_json_parser(tmp_path):
+    script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
+    assert 'source "$ROOT/scripts/lib/wallet_rpc.sh"' in script
+    assert "rpc_wallet_j" in script
+    assert not re.search(r"(?m)\brpc_wallet\s+[^\n]*\|\s*j\b", script)
     helper = ROOT / "scripts" / "lib" / "wallet_rpc.sh"
     assert helper.is_file(), "wallet RPC helper is missing"
     fake_rpc = tmp_path / "fake-rpc.sh"
