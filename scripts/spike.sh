@@ -13,6 +13,7 @@ BUSYBOX_REF='busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4c
 export Z3_ZEBRA_IMAGE=${Z3_ZEBRA_IMAGE:-zfnd/zebra:6.2.3@sha256:bb2a6029db277ee3a10e951dcc0ddd36b4cbcbe0fad684746d695ee21d53fde2}
 export Z3_ZALLET_IMAGE=${Z3_ZALLET_IMAGE:-zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d}
 OUT=${OUT:-$ROOT/out}; mkdir -p "$OUT"
+STARTUP_DIAGNOSTICS="$OUT/diagnostics/wallet-startup.log"
 START=$(date +%s)
 RPC=$ROOT/scripts/rpc.sh
 ROUTER=${ZCANARY_ZALLET_RPC:-http://127.0.0.1:8181}   # Z3 rpc-router (Zallet wallet API)
@@ -21,9 +22,9 @@ ZEBRA=${ZCANARY_NODE_RPC:-http://127.0.0.1:29232}      # direct Zebra RPC
 : "${ZCANARY_ZALLET_PASSWORD:?set ZCANARY_ZALLET_PASSWORD in the environment}"
 : "${ZCANARY_NODE_USER:?set ZCANARY_NODE_USER in the environment}"
 : "${ZCANARY_NODE_PASSWORD:?set ZCANARY_NODE_PASSWORD in the environment}"
-rpc_wallet() { RPC_USER="$ZCANARY_ZALLET_USER" RPC_PASS="$ZCANARY_ZALLET_PASSWORD" "$RPC" "$ROUTER" "$@"; }
 rpc_node() { RPC_USER="$ZCANARY_NODE_USER" RPC_PASS="$ZCANARY_NODE_PASSWORD" "$RPC" "$ZEBRA" "$@"; }
 j() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
+source "$ROOT/scripts/lib/wallet_rpc.sh"
 log() { echo "==> $*"; }
 
 # --- 0. host workaround: on this box Docker's legacy iptables FORWARD=DROP blocked
@@ -91,25 +92,53 @@ fi
 $DC ps --format '{{.Service}} {{.Image}}' > "$OUT/images.txt"
 cd "$ROOT"
 
-log "waiting for router + wallet"
-for i in $(seq 60); do
-  rpc_wallet getwalletinfo 2>/dev/null | grep -q '"result"' && break
-  [ "$i" = 20 ] && (cd z3 && $DC restart rpc-router >/dev/null 2>&1)  # router can wedge if zallet came up late
-  sleep 3
+WAIT_ATTEMPTS=120
+WAIT_INTERVAL=3
+WAIT_START=$(date +%s)
+WAIT_READY=0
+ROUTER_RESTARTED=0
+log "waiting for router + wallet (budget ${WAIT_ATTEMPTS} x ${WAIT_INTERVAL}s)"
+for i in $(seq "$WAIT_ATTEMPTS"); do
+  if rpc_wallet getwalletinfo 2>/dev/null | grep -q '\"result\"'; then
+    WAIT_READY=1
+    break
+  fi
+  if [ "$i" -eq 20 ] && [ "$ROUTER_RESTARTED" -eq 0 ]; then
+    log "restarting rpc-router once while wallet RPC is unavailable"
+    (cd "$ROOT/z3" && docker compose --env-file .env.regtest restart rpc-router >/dev/null 2>&1) || true
+    ROUTER_RESTARTED=1
+  fi
+  if [ "$((i % 20))" -eq 0 ]; then
+    WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
+    log "wallet RPC still not ready after ${WAIT_ELAPSED}s (attempt ${i}/${WAIT_ATTEMPTS})"
+  fi
+  [ "$i" -eq "$WAIT_ATTEMPTS" ] || sleep "$WAIT_INTERVAL"
 done
+WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
+if [ "$WAIT_READY" -eq 1 ]; then
+  log "wallet RPC ready after ${WAIT_ELAPSED}s"
+else
+  mkdir -p "$(dirname "$STARTUP_DIAGNOSTICS")"
+  append_redacted_tail "$STARTUP_DIAGNOSTICS" "docker compose --env-file .env.regtest ps -a" "$ROOT/z3" docker compose --env-file .env.regtest ps -a
+  for service in zebra zallet rpc-router; do
+    append_redacted_tail "$STARTUP_DIAGNOSTICS" "docker compose --env-file .env.regtest logs --no-color --tail 40 $service" "$ROOT/z3" docker compose --env-file .env.regtest logs --no-color --tail 40 "$service"
+  done
+  printf 'wallet RPC not ready after %s s\n' "$WAIT_ELAPSED" >&2
+  exit 1
+fi
 
 # --- 2. accounts
-acct() { rpc_wallet z_listaccounts | j "[a for a in d['result'] if a['name']=='$1']"; }
+acct() { rpc_wallet_j "[a for a in d['result'] if a['name']=='$1']" z_listaccounts; }
 [ "$(acct sender)" = "[]" ] && rpc_wallet z_getnewaccount '["sender"]' >/dev/null
 [ "$(acct recipient)" = "[]" ] && rpc_wallet z_getnewaccount '["recipient"]' >/dev/null
-SA=$(rpc_wallet z_listaccounts | j "[a for a in d['result'] if a['name']=='sender'][0]['account_uuid']")
-RA=$(rpc_wallet z_listaccounts | j "[a for a in d['result'] if a['name']=='recipient'][0]['account_uuid']")
-SUA=$(rpc_wallet z_listaccounts | j "[a for a in d['result'] if a['name']=='sender'][0]['addresses'][0]['ua']")
-RUA=$(rpc_wallet z_listaccounts | j "[a for a in d['result'] if a['name']=='recipient'][0]['addresses'][0]['ua']")
+SA=$(rpc_wallet_j "[a for a in d['result'] if a['name']=='sender'][0]['account_uuid']" z_listaccounts)
+RA=$(rpc_wallet_j "[a for a in d['result'] if a['name']=='recipient'][0]['account_uuid']" z_listaccounts)
+SUA=$(rpc_wallet_j "[a for a in d['result'] if a['name']=='sender'][0]['addresses'][0]['ua']" z_listaccounts)
+RUA=$(rpc_wallet_j "[a for a in d['result'] if a['name']=='recipient'][0]['addresses'][0]['ua']" z_listaccounts)
 rpc_wallet z_listunifiedreceivers "[\"$SUA\"]" > "$OUT/receivers_sender.json"
 # Recipient receiver-set can be varied only for isolated regtest test apps.
 RRT=${RECIPIENT_RECEIVERS:-'["orchard","sapling"]'}
-[ "$RRT" = default ] || RUA=$(rpc_wallet z_getaddressforaccount "[\"$RA\",$RRT]" | j "d['result']['address']")
+[ "$RRT" = default ] || RUA=$(rpc_wallet_j "d['result']['address']" z_getaddressforaccount "[\"$RA\",$RRT]")
 rpc_wallet z_listunifiedreceivers "[\"$RUA\"]" > "$OUT/receivers_recipient.json"
 S_ORCH=$(j "d['result']['orchard']" < "$OUT/receivers_sender.json")
 S_T=$(j "d['result']['p2pkh']" < "$OUT/receivers_sender.json")
@@ -150,7 +179,7 @@ CANARY=${ZCANARY_MEMO:-ZC-M-$(python3 -c 'import secrets;print(secrets.token_hex
 AMOUNT=${ZCANARY_AMOUNT:-0.5}
 MEMO=$(python3 -c 'import sys;print(sys.argv[1].encode().hex())' "$CANARY")
 log "z_sendmany $AMOUNT ZEC sender->recipient, memo marker supplied (value redacted), FullPrivacy"
-OPID=$(rpc_wallet z_sendmany "[\"$S_ORCH\",[{\"address\":\"$RUA\",\"amount\":$AMOUNT,\"memo\":\"$MEMO\"}],1,null,\"FullPrivacy\"]" | j "d['result']")
+OPID=$(rpc_wallet_j "d['result']" z_sendmany "[\"$S_ORCH\",[{\"address\":\"$RUA\",\"amount\":$AMOUNT,\"memo\":\"$MEMO\"}],1,null,\"FullPrivacy\"]")
 for i in $(seq 40); do
   rpc_wallet z_getoperationresult "[[\"$OPID\"]]" > "$OUT/op.json"
   [ "$(j "len(d['result'])" < "$OUT/op.json")" -gt 0 ] && break
@@ -168,8 +197,8 @@ BH=$(j "d['result']['blockhash']" < "$OUT/rawtx.json")
 rpc_node getblock "[\"$BH\",1]" > "$OUT/block.json"
 rpc_wallet z_viewtransaction "[\"$TXID\"]" > "$OUT/viewtx.json"
 rpc_wallet z_getbalanceforaccount "[\"$RA\",1]" > "$OUT/balance_recipient.json"
-APP_CHAIN=$(rpc_wallet getblockchaininfo | j "d['result']['chain']")
-APP_GENESIS=$(rpc_wallet getblockhash '[0]' | j "d['result']")
+APP_CHAIN=$(rpc_wallet_j "d['result']['chain']" getblockchaininfo)
+APP_GENESIS=$(rpc_wallet_j "d['result']" getblockhash '[0]')
 case "$APP_GENESIS" in
   00040fe8ec8471911baa1db1266ea15dd06b4a8a5c453883c000b031973dce08) APP_NETWORK=mainnet ;;
   05a60a92d99d85997cce3b87616c089f6124d7342af37106edc76126334a2c38) APP_NETWORK=testnet ;;
