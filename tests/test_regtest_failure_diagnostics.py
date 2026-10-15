@@ -46,6 +46,99 @@ def test_busybox_tags_are_created_from_the_digest_reference():
     assert not re.search(r"\bdocker\s+tag\s+busybox:1\.36\.1(?:\s|$)", script)
 
 
+def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
+    script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
+
+    assert re.search(r"\bWAIT_ATTEMPTS=120\b", script)
+    assert "wallet RPC ready after" in script
+    assert "wallet RPC not ready after" in script
+    assert script.count("restart rpc-router") == 1
+    assert 'docker compose --env-file .env.regtest ps -a' in script
+    assert 'docker compose --env-file .env.regtest logs --no-color --tail 40' in script
+    assert "for service in zebra zallet rpc-router" in script
+    assert "append_redacted_tail" in script
+
+
+def test_rpc_wallet_http_error_is_readable_and_skips_json_parser(tmp_path):
+    helper = ROOT / "scripts" / "lib" / "wallet_rpc.sh"
+    assert helper.is_file(), "wallet RPC helper is missing"
+    fake_rpc = tmp_path / "fake-rpc.sh"
+    fake_rpc.write_text(
+        "printf 'curl: (22) The requested URL returned error: 502\\n' >&2\n"
+        "exit 22\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "RPC": str(fake_rpc),
+            "ROUTER": "http://127.0.0.1:8181",
+            "ZCANARY_ZALLET_USER": "unit-user",
+            "ZCANARY_ZALLET_PASSWORD": "unit-test-password-not-a-secret",
+        }
+    )
+    proc = subprocess.run(
+        ["bash", "-c", 'source "$1"; j() { echo JSON_PARSER_CALLED >&2; return 99; }; rpc_wallet_j ignored getwalletinfo',
+         "bash", str(helper)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 22
+    assert "wallet RPC getwalletinfo failed: HTTP error (curl exit 22)" in proc.stderr
+    assert "curl: (22)" in proc.stderr
+    assert "JSON_PARSER_CALLED" not in proc.stderr
+    assert env["ZCANARY_ZALLET_PASSWORD"] not in proc.stderr
+
+
+def test_append_redacted_tail_sanitizes_addresses_hashes_and_keeps_40_lines(tmp_path):
+    helper = ROOT / "scripts" / "lib" / "diagnostics.sh"
+    fake = tmp_path / "fake-container-logs.sh"
+    address = "uregtest1abcdefghijklmnopqrstuvwxyz0123456789"
+    auth_hash = "0123456789abcdef0123456789abcdef$" + "a" * 64
+    fake.write_text(
+        "for i in {1..45}; do printf 'diagnostic-%02d\\n' \"$i\"; done\n"
+        f"printf '%s\\n' \"$ZCANARY_ZALLET_PASSWORD\" '{address}' '{auth_hash}'\\n"
+        "exit 3\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["ZCANARY_ZALLET_PASSWORD"] = "unit-test-password-not-a-secret"
+    diagnostics = tmp_path / "wallet-startup.log"
+    proc = subprocess.run(
+        ["bash", "-c", 'source "$1"; append_redacted_tail "$2" "fake container logs" "$3" bash "$4"',
+         "bash", str(helper), str(diagnostics), str(tmp_path), str(fake)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    rendered = diagnostics.read_text(encoding="utf-8")
+    for output in (proc.stderr, rendered):
+        assert "fake container logs (exit 3)" in output
+        assert "diagnostic-01" not in output and "diagnostic-06" in output and "diagnostic-45" in output
+        assert env["ZCANARY_ZALLET_PASSWORD"] not in output
+        assert address not in output and auth_hash not in output
+        assert "<redacted>" in output and "<redacted-auth-hash>" in output
+        assert f"{address[:12]}…{address[-6:]}" in output
+
+
+def test_ci_uploads_wallet_startup_diagnostics_always():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "Upload redacted wallet startup diagnostics" in workflow
+    assert "out/diagnostics/wallet-startup.log" in workflow
+    assert re.search(
+        r"name: Upload redacted wallet startup diagnostics\n\s+if: always\(\)", workflow
+    )
+    assert "if-no-files-found: ignore" in workflow
+
+
 def test_run_with_tail_redacts_secrets_and_shows_only_last_20_lines(tmp_path):
     helper = ROOT / "scripts" / "lib" / "diagnostics.sh"
     assert helper.is_file(), "spike diagnostics helper is missing"
