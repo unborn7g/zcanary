@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
+import re
+import selectors
+import signal
 import subprocess
 import sys
 import time
@@ -17,6 +21,7 @@ from .redact import text as redact_text
 from .rpc import RpcError, Zallet, Zebra
 
 EXIT_PASS, EXIT_FAIL, EXIT_NOT_RUN, EXIT_ERROR = 0, 1, 2, 3
+_PROGRESS_LINE_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] \[ZCANARY-PROGRESS\] ")
 NOT_COVERED = [
     "Network timing, IP/transport metadata, and observers outside the captured app outputs.",
     "App databases, analytics, telemetry, crash dumps, or logs not explicitly configured for capture.",
@@ -37,6 +42,129 @@ def _text(value: object) -> str:
     return str(value)
 
 
+def _emit_progress(message: str) -> None:
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    print(f"[{timestamp}] [ZCANARY-PROGRESS] {message}", flush=True)
+
+
+def _redact_progress_line(line: str, env: dict[str, str]) -> str:
+    for name, secret in env.items():
+        upper = name.upper()
+        if not secret or not any(
+            marker in upper
+            for marker in ("PASSWORD", "PASS", "TOKEN", "SECRET", "SEED", "PRIVATE_KEY", "MEMO", "AUTH_HASH", "PWHASH")
+        ):
+            continue
+        replacement = "<canary>" if "MEMO" in upper else "<redacted>"
+        encoded = secret.encode("utf-8")
+        for value in (secret, encoded.hex(), encoded.hex().upper(), base64.b64encode(encoded).decode("ascii")):
+            if value:
+                line = line.replace(value, replacement)
+    line = re.sub(r"(?i)(authorization\s*:\s*basic\s+)[A-Za-z0-9+/=]+", r"\1<redacted>", line)
+    line = re.sub(r"(?i)\b[0-9a-f]{32}\$[0-9a-f]{64}\b", "<redacted-auth-hash>", line)
+    line = re.sub(r"ZC-[MLT]-[A-F0-9]{24}", "<canary>", line, flags=re.IGNORECASE)
+    line = re.sub(
+        r"5a432d(?:4d|4c|54)2d(?:3[0-9]|4[1-6]){24}",
+        "<canary>",
+        line,
+        flags=re.IGNORECASE,
+    )
+    return redact_text(line)
+
+
+def _terminate_process(proc: subprocess.Popen) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:
+        proc.kill()
+
+
+def _run_network_start_command(
+    name: str,
+    command: str,
+    base: Path,
+    env: dict[str, str],
+    timeout_s: float,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Capture network-start output while allowing only sanitized progress through."""
+    started = time.monotonic()
+    _emit_progress("phase=start name=network-start")
+    captured = bytearray()
+    pending = bytearray()
+    timed_out = False
+    try:
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=base,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+            start_new_session=(os.name == "posix"),
+        )
+    except OSError as exc:
+        elapsed = round(time.monotonic() - started, 2)
+        stdout, stderr = "", f"command launch error: {exc.__class__.__name__}"
+        step = {"status": "error", "exit_code": None, "seconds": elapsed}
+        _emit_progress(f"phase=complete name=network-start status=error elapsed_s={elapsed:.2f}")
+        step["captured_bytes"] = 0
+        print(f"[zcanary] {name}: {step['status']} ({step['seconds']}s)")
+        return step, {f"{name}.stdout": stdout, f"{name}.stderr": stderr}
+
+    if proc.stdout is None:
+        _terminate_process(proc)
+        proc.wait()
+        raise OSError("network start output pipe was unavailable")
+
+    def stream_progress(raw_line: bytes) -> None:
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r")
+        if _PROGRESS_LINE_RE.match(line):
+            print(_redact_progress_line(line, env), flush=True)
+
+    deadline = started + timeout_s
+    with selectors.DefaultSelector() as selector:
+        selector.register(proc.stdout, selectors.EVENT_READ)
+        while selector.get_map():
+            now = time.monotonic()
+            if not timed_out and now >= deadline and selector.get_map():
+                timed_out = True
+                _terminate_process(proc)
+            wait_s = 0.1 if timed_out or proc.poll() is not None else max(0.0, min(0.1, deadline - now))
+            for key, _ in selector.select(wait_s):
+                try:
+                    chunk = os.read(key.fd, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    if pending:
+                        stream_progress(bytes(pending))
+                        pending.clear()
+                    continue
+                captured.extend(chunk)
+                pending.extend(chunk)
+                while b"\n" in pending:
+                    line, _, rest = pending.partition(b"\n")
+                    pending[:] = rest
+                    stream_progress(line)
+
+    returncode = proc.wait()
+    elapsed = round(time.monotonic() - started, 2)
+    stdout = captured.decode("utf-8", errors="replace")
+    status = "timeout" if timed_out else "ok" if returncode == 0 else "failed"
+    rc = None if timed_out else returncode
+    step = {"status": status, "exit_code": rc, "seconds": elapsed}
+    step["captured_bytes"] = len(captured)
+    _emit_progress(f"phase=complete name=network-start status={status} elapsed_s={elapsed:.2f}")
+    print(f"[zcanary] {name}: {step['status']} ({step['seconds']}s)")
+    return step, {f"{name}.stdout": stdout, f"{name}.stderr": ""}
+
+
 def _run_command(
     name: str,
     command: str,
@@ -44,7 +172,9 @@ def _run_command(
     env: dict[str, str],
     timeout_s: float,
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    """Run a configured lifecycle/log command without printing command text or output."""
+    """Run a configured lifecycle/log command without printing raw captured output."""
+    if name == "network.start":
+        return _run_network_start_command(name, command, base, env, timeout_s)
     started = time.monotonic()
     try:
         p = subprocess.run(
@@ -84,15 +214,62 @@ def _try(fn, *args):
         return None, str(e)
 
 
-def _write_network_start_diagnostics(path: Path, step: dict[str, Any]) -> None:
-    """Ensure failed network startup always leaves a safe artifact for CI."""
+def _expected_regtest_diagnostic_labels() -> tuple[str, ...]:
+    return (
+        "docker compose ps -a",
+        *(
+            f"docker compose --env-file .env.regtest logs --no-color --tail 80 {service}"
+            for service in ("zebra", "zallet", "rpc-router")
+        ),
+    )
+
+
+def _ensure_regtest_diagnostics(path: Path, env: dict[str, str]) -> None:
+    """Collect bounded, redacted Compose status/logs if the child did not already."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    has_redacted_details = path.is_file() and path.stat().st_size > 0
+    expected = _expected_regtest_diagnostic_labels()
+    try:
+        existing = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    except OSError:
+        existing = ""
+    if all(label in existing for label in expected):
+        return
+
+    repo_root = Path(__file__).resolve().parents[1]
+    collector = repo_root / "scripts" / "capture-regtest-diagnostics.sh"
+    try:
+        subprocess.run(
+            ["bash", str(collector), str(path), str(repo_root / "z3")],
+            cwd=repo_root,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    try:
+        rendered = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    except OSError:
+        rendered = ""
+    missing = [label for label in expected if label not in rendered]
+    if missing:
+        with path.open("a", encoding="utf-8") as diagnostics:
+            for label in missing:
+                diagnostics.write(f"==> {label} (diagnostic collection unavailable)\n")
+
+
+def _write_network_start_diagnostics(
+    path: Path, step: dict[str, Any], env: dict[str, str]
+) -> None:
+    """Ensure failed network startup always leaves a safe artifact for CI."""
+    _ensure_regtest_diagnostics(path, env)
     with path.open("a", encoding="utf-8") as diagnostics:
-        if not has_redacted_details:
-            diagnostics.write(
-                "No redacted container diagnostics were emitted by the network start command.\n"
-            )
         diagnostics.write("\n==> zcanary network.start failed ==\n")
         diagnostics.write(
             f"status={step.get('status', 'unknown')} "
@@ -246,7 +423,7 @@ def run(cfg_path: str) -> int:
     result_error: str | None = None
 
     # Remove stale hand-off/result files so a failed app cannot reuse a previous run's values.
-    for stale in (context_path if cfg.start_command else None, result_path):
+    for stale in (context_path if cfg.start_command else None, result_path, startup_diagnostics_path):
         if stale is not None:
             try:
                 stale.unlink(missing_ok=True)
@@ -269,7 +446,7 @@ def run(cfg_path: str) -> int:
                 execution_errors.append("network start command did not complete successfully")
                 try:
                     _write_network_start_diagnostics(
-                        startup_diagnostics_path, steps["network.start"]
+                        startup_diagnostics_path, steps["network.start"], env
                     )
                 except OSError:
                     execution_errors.append("could not write wallet startup diagnostics artifact")
@@ -357,6 +534,12 @@ def run(cfg_path: str) -> int:
         else:
             steps["app.stop"] = {"status": "skipped", "reason": "no running app to stop"}
 
+        if execution_errors:
+            try:
+                _ensure_regtest_diagnostics(startup_diagnostics_path, env)
+            except OSError:
+                execution_errors.append("could not collect redacted regtest diagnostics")
+
         if cfg.stop_command and network_start_attempted:
             steps["network.stop"], out = _run_command(
                 "network.stop", cfg.stop_command, base, env, cfg.command_timeout_s
@@ -409,6 +592,12 @@ def run(cfg_path: str) -> int:
         view, e = _try(zallet.view, txid)
         if e:
             errors.setdefault("z_viewtransaction", e)
+
+    if execution_errors or errors:
+        try:
+            _ensure_regtest_diagnostics(startup_diagnostics_path, env)
+        except OSError:
+            execution_errors.append("could not collect redacted regtest diagnostics")
 
     results = [
         checks.c1(cfg.network, chain, recipient, genesis, app_network, app_genesis_hash),

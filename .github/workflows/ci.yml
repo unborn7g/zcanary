@@ -25,7 +25,7 @@ jobs:
   integration:
     name: Disposable Docker regtest integration
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 45
     env:
       ZCANARY_RUN_INTEGRATION: "1"
       # These are ephemeral regtest RPC credentials, not wallet keys or seeds.
@@ -45,8 +45,9 @@ jobs:
       - name: Verify Docker availability
         run: docker compose version && docker info
       - name: Run sample-app integration tests
-        run: python -m pytest -q -m integration
+        run: python -u -m pytest -v -s -x -m integration --durations=0
       - name: Scan generated report artifacts
+        id: artifact_scan
         if: always()
         run: python scripts/scan-artifacts.py out/reports out/image-pull-timing.json
       - name: Write timing and result summary
@@ -68,8 +69,11 @@ jobs:
           print(f"- Integration job elapsed time: {round(total, 1)} s" if total is not None else "- Integration job elapsed time: unavailable")
           print("- Raw app logs and wallet data are not uploaded.")
           PY
+      - name: Capture redacted Compose diagnostics after failure
+        if: failure()
+        run: bash scripts/capture-regtest-diagnostics.sh out/diagnostics/wallet-startup.log "$GITHUB_WORKSPACE/z3"
       - name: Upload sanitized reports and timing
-        if: success()
+        if: always() && steps.artifact_scan.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: zcanary-regtest-reports

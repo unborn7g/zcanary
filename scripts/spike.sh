@@ -12,41 +12,77 @@ BUSYBOX_REF='busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4c
 # passes the complete runtime suite. Both images are pinned by immutable digest.
 export Z3_ZEBRA_IMAGE=${Z3_ZEBRA_IMAGE:-zfnd/zebra:6.2.3@sha256:bb2a6029db277ee3a10e951dcc0ddd36b4cbcbe0fad684746d695ee21d53fde2}
 export Z3_ZALLET_IMAGE=${Z3_ZALLET_IMAGE:-zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d}
-OUT=${OUT:-$ROOT/out}; mkdir -p "$OUT"
+OUT=${OUT:-$ROOT/out}
+case "$OUT" in
+  /*) ;;
+  *) OUT="$ROOT/$OUT" ;;
+esac
+mkdir -p "$OUT"
 STARTUP_DIAGNOSTICS="$OUT/diagnostics/wallet-startup.log"
+rm -f "$STARTUP_DIAGNOSTICS"
 START=$(date +%s)
 RPC=$ROOT/scripts/rpc.sh
 ROUTER=${ZCANARY_ZALLET_RPC:-http://127.0.0.1:8181}   # Z3 rpc-router (Zallet wallet API)
 ZEBRA=${ZCANARY_NODE_RPC:-http://127.0.0.1:29232}      # direct Zebra RPC
+rpc_node() { RPC_USER="$ZCANARY_NODE_USER" RPC_PASS="$ZCANARY_NODE_PASSWORD" "$RPC" "$ZEBRA" "$@"; }
+j() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
+log() { echo "==> $*"; }
+progress() {
+  printf '[%s] [ZCANARY-PROGRESS] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"
+}
+begin_phase() {
+  ACTIVE_PHASE="$1"
+  progress "phase=start name=$ACTIVE_PHASE"
+}
+complete_phase() {
+  local completed_phase="${1:-$ACTIVE_PHASE}"
+  progress "phase=complete name=$completed_phase"
+  ACTIVE_PHASE=""
+}
+ACTIVE_PHASE=bootstrap
+DIAGNOSTICS_CAPTURED=0
+capture_wallet_startup_diagnostics() {
+  if [ "$DIAGNOSTICS_CAPTURED" -eq 1 ]; then
+    return 0
+  fi
+  DIAGNOSTICS_CAPTURED=1
+  bash "$ROOT/scripts/capture-regtest-diagnostics.sh" "$STARTUP_DIAGNOSTICS" "$ROOT/z3" || true
+}
+on_exit() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ]; then
+    progress "phase=failed name=${ACTIVE_PHASE:-unknown} exit=$status"
+    capture_wallet_startup_diagnostics
+  fi
+  exit "$status"
+}
+trap on_exit EXIT
 : "${ZCANARY_ZALLET_USER:?set ZCANARY_ZALLET_USER in the environment}"
 : "${ZCANARY_ZALLET_PASSWORD:?set ZCANARY_ZALLET_PASSWORD in the environment}"
 : "${ZCANARY_NODE_USER:?set ZCANARY_NODE_USER in the environment}"
 : "${ZCANARY_NODE_PASSWORD:?set ZCANARY_NODE_PASSWORD in the environment}"
-rpc_node() { RPC_USER="$ZCANARY_NODE_USER" RPC_PASS="$ZCANARY_NODE_PASSWORD" "$RPC" "$ZEBRA" "$@"; }
-j() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
-log() { echo "==> $*"; }
-capture_wallet_startup_diagnostics() {
-  mkdir -p "$(dirname "$STARTUP_DIAGNOSTICS")"
-  append_redacted_tail "$STARTUP_DIAGNOSTICS" "docker compose --env-file .env.regtest ps -a" "$ROOT/z3" docker compose --env-file .env.regtest ps -a
-  for service in zebra zallet rpc-router; do
-    append_redacted_tail "$STARTUP_DIAGNOSTICS" "docker compose --env-file .env.regtest logs --no-color --tail 40 $service" "$ROOT/z3" docker compose --env-file .env.regtest logs --no-color --tail 40 "$service"
-  done
-}
 source "$ROOT/scripts/lib/wallet_rpc.sh"
 
 # --- 0. host workaround: on this box Docker's legacy iptables FORWARD=DROP blocked
 # container<->container traffic on compose bridges. Disabling br_netfilter fixes it.
+begin_phase "host-workaround"
 if [ "$(sysctl -n net.bridge.bridge-nf-call-iptables 2>/dev/null || echo 0)" = 1 ]; then
   log "disabling bridge-nf-call-iptables (container-to-container workaround)"
   sudo sysctl -qw net.bridge.bridge-nf-call-iptables=0 net.bridge.bridge-nf-call-ip6tables=0
 fi
+complete_phase "host-workaround"
 
 # --- 1. Z3 checkout pinned
+begin_phase "z3-checkout"
 [ -d z3 ] || git clone -q https://github.com/ZcashFoundation/z3 z3
 git -C z3 fetch -q origin && git -C z3 checkout -q "$Z3_REF"
 cd z3
+complete_phase "z3-checkout"
 DC="docker compose --env-file .env.regtest"
+begin_phase "regtest-start"
 if [ -z "${KEEP:-}" ]; then
+  begin_phase "stack-reset-prepare"
   log "resetting regtest stack"
   HELPER_PULL_START=$(python3 -c 'import time; print(time.monotonic_ns())')
   run_with_tail "pinned regtest-init helper image pull" docker pull "$BUSYBOX_REF"
@@ -78,6 +114,8 @@ if version == "0.1.0-beta.3" and "allow_insecure_remote_bind" not in text:
     text = text.replace(needle, needle + "allow_insecure_remote_bind = true\n", 1)
 path.write_text(text, encoding="utf-8")
 PY
+complete_phase "stack-reset-prepare"
+  ACTIVE_PHASE="regtest-start"
   COMPOSE_PULL_START=$(python3 -c 'import time; print(time.monotonic_ns())')
   run_with_tail "pinned Z3 service images pull" $DC pull --ignore-buildable
   COMPOSE_PULL_END=$(python3 -c 'import time; print(time.monotonic_ns())')
@@ -98,6 +136,7 @@ PY
 fi
 $DC ps --format '{{.Service}} {{.Image}}' > "$OUT/images.txt"
 cd "$ROOT"
+complete_phase "regtest-start"
 
 WAIT_ATTEMPTS=120
 WAIT_INTERVAL=3
@@ -105,6 +144,7 @@ WAIT_START=$(date +%s)
 WAIT_READY=0
 ROUTER_RESTARTED=0
 WALLET_RPC_READY=0
+begin_phase "wallet-rpc-wait"
 log "waiting for router + wallet (budget ${WAIT_ATTEMPTS} x ${WAIT_INTERVAL}s)"
 for i in $(seq "$WAIT_ATTEMPTS"); do
   if wallet_accounts_ready 2>/dev/null; then
@@ -126,6 +166,8 @@ done
 WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
 if [ "$WAIT_READY" -eq 1 ]; then
   log "wallet RPC ready after ${WAIT_ELAPSED}s"
+  progress "phase=complete name=wallet-rpc-wait elapsed_s=$WAIT_ELAPSED"
+  ACTIVE_PHASE=""
 else
   capture_wallet_startup_diagnostics
   printf 'wallet RPC not ready after %s s\n' "$WAIT_ELAPSED" >&2
@@ -133,6 +175,7 @@ else
 fi
 
 # --- 2. accounts
+begin_phase "accounts"
 acct() { rpc_wallet_j "[a for a in d['result'] if a['name']=='$1']" z_listaccounts; }
 [ "$(acct sender)" = "[]" ] && rpc_wallet z_getnewaccount '["sender"]' >/dev/null
 [ "$(acct recipient)" = "[]" ] && rpc_wallet z_getnewaccount '["recipient"]' >/dev/null
@@ -149,17 +192,26 @@ S_ORCH=$(j "d['result']['orchard']" < "$OUT/receivers_sender.json")
 S_T=$(j "d['result']['p2pkh']" < "$OUT/receivers_sender.json")
 R_T=$(j "d['result'].get('p2pkh','')" < "$OUT/receivers_recipient.json")
 R_SAP=$(j "d['result'].get('sapling','')" < "$OUT/receivers_recipient.json")
+complete_phase "accounts"
 
 # --- 3. fund: shielded coinbase to sender's Orchard receiver (lands in Ironwood after NU6.3),
 # plus transparent coinbase maturity blocks for the pinned test wallet.
-log "mining: 1 shielded-coinbase block to sender, 100 maturity blocks"
+begin_phase "mine-shielded-block"
+log "mining: 1 shielded-coinbase block to sender"
 rpc_node generatetoaddress "[1,\"$S_ORCH\"]" >/dev/null
+complete_phase "mine-shielded-block"
+begin_phase "mine-maturity-blocks"
+log "mining: 100 transparent coinbase maturity blocks"
 rpc_node generatetoaddress "[100,\"$S_T\"]" >/dev/null
+complete_phase "mine-maturity-blocks"
+begin_phase "funding-sync"
 sleep 8
 rpc_wallet z_getbalanceforaccount "[\"$SA\",1]" | tee "$OUT/balance_sender_before.json"; echo
 rpc_node getblockchaininfo > "$OUT/chaininfo_before.json"
+complete_phase "funding-sync"
 
 if [ "${PREPARE_ONLY:-0}" = 1 ]; then
+  begin_phase "prepare-context"
   python3 - "$OUT/context.json" "$S_ORCH" "$RUA" "$RA" "$SA" "$R_T" "$R_SAP" <<'PY'
 import json, sys
 path, sender, recipient, account, sender_account, transparent, sapling = sys.argv[1:]
@@ -175,6 +227,7 @@ with open(path, "w", encoding="utf-8") as f:
     }, f, indent=2)
     f.write("\n")
 PY
+complete_phase "prepare-context"
   log "regtest accounts prepared; context written without secrets or memo markers"
   exit 0
 fi
@@ -183,18 +236,32 @@ fi
 CANARY=${ZCANARY_MEMO:-ZC-M-$(python3 -c 'import secrets;print(secrets.token_hex(12).upper())')}
 AMOUNT=${ZCANARY_AMOUNT:-0.5}
 MEMO=$(python3 -c 'import sys;print(sys.argv[1].encode().hex())' "$CANARY")
+begin_phase "send-payment"
+progress "phase=start name=z_sendmany-submission"
 log "z_sendmany $AMOUNT ZEC sender->recipient, memo marker supplied (value redacted), FullPrivacy"
 OPID=$(rpc_wallet_j "d['result']" z_sendmany "[\"$S_ORCH\",[{\"address\":\"$RUA\",\"amount\":$AMOUNT,\"memo\":\"$MEMO\"}],1,null,\"FullPrivacy\"]")
+progress "phase=complete name=z_sendmany-submission"
+complete_phase "send-payment"
+begin_phase "wait-operation-result"
+OP_WAIT_START=$(date +%s)
 for i in $(seq 40); do
   rpc_wallet z_getoperationresult "[[\"$OPID\"]]" > "$OUT/op.json"
   [ "$(j "len(d['result'])" < "$OUT/op.json")" -gt 0 ] && break
   sleep 2
 done
+OP_WAIT_ELAPSED=$(( $(date +%s) - OP_WAIT_START ))
+progress "phase=complete name=wait-operation-result elapsed_s=$OP_WAIT_ELAPSED"
+ACTIVE_PHASE="payment-result-check"
 [ "$(j "d['result'][0]['status']" < "$OUT/op.json")" = success ] || { echo "payment operation failed (details withheld)" >&2; exit 1; }
+ACTIVE_PHASE=""
 TXID=$(j "d['result'][0]['result']['txid']" < "$OUT/op.json"); echo "$TXID" > "$OUT/txid"
-rpc_node generate '[1]' >/dev/null; sleep 8
+begin_phase "mine-confirmation-block"
+rpc_node generate '[1]' >/dev/null
+sleep 8
+complete_phase "mine-confirmation-block"
 
 # --- 5. decode + wallet view. The raw wallet view is local test data, not printed or uploaded.
+begin_phase "decode-transaction"
 rpc_node getrawtransaction "[\"$TXID\",1]" > "$OUT/rawtx.json"
 rpc_node getrawtransaction "[\"$TXID\",0]" > "$OUT/rawtx_hex.json"
 rpc_node getblockchaininfo > "$OUT/chaininfo_after.json"
@@ -219,6 +286,8 @@ with open(path, "w", encoding="utf-8") as f:
                "app_genesis_hash": app_genesis}, f, indent=2)
     f.write("\n")
 PY
+complete_phase "decode-transaction"
+begin_phase "verify-captured-transaction"
 
 python3 - "$OUT" "$CANARY" "$RA" <<'PY'
 import json,sys,os
@@ -241,4 +310,5 @@ print('canary marker in public node data:',leak or 'none')
 print('GATE1', 'PASS' if ok else 'FAIL')
 sys.exit(0 if ok else 1)
 PY
+complete_phase "verify-captured-transaction"
 echo "elapsed_s=$(( $(date +%s) - START ))"

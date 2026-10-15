@@ -51,8 +51,8 @@ append_redacted_tail() {
     status=$?
   fi
   {
-    printf '==> %s (exit %s); last 40 output lines follow\n' "$label" "$status"
-    tail -n 40 -- "$log_file" | redact_diagnostic
+    printf '==> %s (exit %s); last 80 output lines follow\n' "$label" "$status"
+    tail -n 80 -- "$log_file" | redact_diagnostic
   } | tee -a "$output_file" >&2 || true
   rm -f "$log_file"
   return 0
