@@ -68,6 +68,7 @@ def test_rpc_wallet_http_error_is_readable_and_skips_json_parser(tmp_path):
         "exit 22\n",
         encoding="utf-8",
     )
+    fake_rpc.chmod(0o755)
     env = os.environ.copy()
     env.update(
         {
@@ -100,9 +101,13 @@ def test_append_redacted_tail_sanitizes_addresses_hashes_and_keeps_40_lines(tmp_
     address = "uregtest1abcdefghijklmnopqrstuvwxyz0123456789"
     auth_hash = "0123456789abcdef0123456789abcdef$" + "a" * 64
     fake.write_text(
-        "for i in {1..45}; do printf 'diagnostic-%02d\\n' \"$i\"; done\n"
-        f"printf '%s\\n' \"$ZCANARY_ZALLET_PASSWORD\" '{address}' '{auth_hash}'\\n"
-        "exit 3\n",
+        f"""#!/usr/bin/env bash
+for i in {{1..45}}; do echo "diagnostic-$(printf '%02d' "$i")"; done
+echo "$ZCANARY_ZALLET_PASSWORD"
+echo "{address}"
+echo '{auth_hash}'
+exit 3
+""",
         encoding="utf-8",
     )
     env = os.environ.copy()
@@ -122,7 +127,7 @@ def test_append_redacted_tail_sanitizes_addresses_hashes_and_keeps_40_lines(tmp_
     rendered = diagnostics.read_text(encoding="utf-8")
     for output in (proc.stderr, rendered):
         assert "fake container logs (exit 3)" in output
-        assert "diagnostic-01" not in output and "diagnostic-06" in output and "diagnostic-45" in output
+        assert "diagnostic-08" not in output and "diagnostic-09" in output and "diagnostic-45" in output
         assert env["ZCANARY_ZALLET_PASSWORD"] not in output
         assert address not in output and auth_hash not in output
         assert "<redacted>" in output and "<redacted-auth-hash>" in output
