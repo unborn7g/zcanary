@@ -55,7 +55,9 @@ def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     assert "wallet_accounts_ready" in script
     assert "getwalletinfo" not in script
     assert "WALLET_RPC_READY=1" in script
-    assert "capture_wallet_startup_diagnostics" in script
+    assert script.count("capture_wallet_startup_diagnostics") >= 2
+    timeout_branch = script.split('if [ "$WAIT_READY" -eq 1 ]; then', 1)[1].split("# --- 2. accounts", 1)[0]
+    assert "capture_wallet_startup_diagnostics" in timeout_branch
     assert "wallet RPC ready after" in script
     assert "wallet RPC not ready after" in script
     assert script.count("restart rpc-router") == 1
