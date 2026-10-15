@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from zcanary import cli as cli_module
@@ -24,6 +25,22 @@ def test_child_command_output_is_captured_not_displayed(tmp_path, capsys):
     assert sources["app.logs[1].stdout"] == "captured marker"
     assert "captured marker" not in terminal
     assert "app.logs[1]: ok" in terminal
+
+
+def test_network_start_streams_timestamped_progress_but_not_raw_child_output(tmp_path, capsys):
+    child_marker = "private-network-start-output"
+    command = (
+        "printf '[2030-01-01T00:00:00Z] [ZCANARY-PROGRESS] phase=mining\\n'; "
+        f"printf '{child_marker}\\n'"
+    )
+    step, sources = _run_command("network.start", command, tmp_path, os.environ.copy(), 5)
+    terminal = capsys.readouterr().out
+
+    assert step["status"] == "ok"
+    assert re.search(r"\[\d{4}-\d{2}-\d{2}T[^]]+Z\] \[ZCANARY-PROGRESS\]", terminal)
+    assert "phase=mining" in terminal
+    assert child_marker not in terminal
+    assert child_marker in sources["network.start.stdout"]
 
 
 def test_run_environment_contains_canaries_and_uses_password_env(monkeypatch, tmp_path):
@@ -78,6 +95,9 @@ markdown_path = "../../out/reports/failed-start.md"
     assert "network.start failed" in contents
     assert "exit_code=7" in contents
     assert "private-start-output" not in contents
+    assert "docker compose ps -a" in contents
+    for service in ("zebra", "zallet", "rpc-router"):
+        assert f"docker compose logs --no-color --tail 80 {service}" in contents
 
 
 def test_report_markdown_contains_not_covered_and_selfscan_is_marker_aware():

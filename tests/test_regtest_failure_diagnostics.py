@@ -4,9 +4,12 @@ import importlib.util
 import os
 import re
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+
+import pytest
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +51,78 @@ def test_busybox_tags_are_created_from_the_digest_reference():
     assert not re.search(r"\bdocker\s+tag\s+busybox:1\.36\.1(?:\s|$)", script)
 
 
+def test_ci_integration_is_bounded_live_and_report_upload_is_scan_gated():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "timeout-minutes: 45" in workflow
+    assert 'python -u -m pytest -v -s -x -m integration --durations=0' in workflow
+    assert "id: artifact_scan" in workflow
+    assert "if: always() && steps.artifact_scan.outcome == 'success'" in workflow
+    assert "Upload redacted wallet startup diagnostics" in workflow
+    diagnostics_step = workflow.split("name: Upload redacted wallet startup diagnostics", 1)[1]
+    assert "if: always()" in diagnostics_step.split("uses:", 1)[0]
+
+
+def test_integration_cli_and_prepare_subprocesses_are_bounded_at_900_seconds():
+    module = _integration_module()
+    source = (ROOT / "tests" / "integration" / "test_sample_apps.py").read_text(encoding="utf-8")
+    assert module.CLI_SUBPROCESS_TIMEOUT_S == 900
+    assert module.PREPARE_SUBPROCESS_TIMEOUT_S == 900
+    assert "timeout=1800" not in source
+    assert source.count("timeout_s=CLI_SUBPROCESS_TIMEOUT_S") == 1
+    assert source.count("timeout_s=PREPARE_SUBPROCESS_TIMEOUT_S") == 2
+
+
+def test_integration_subprocess_timeout_is_redacted_with_elapsed_seconds(tmp_path, capsys):
+    module = _integration_module()
+    password = "timeout-unit-password-not-a-secret"
+    env = os.environ.copy()
+    env["ZCANARY_ZALLET_PASSWORD"] = password
+    command = [
+        sys.executable,
+        "-c",
+        "import os,sys,time; "
+        "print('[2030-01-01T00:00:00Z] [ZCANARY-PROGRESS] phase=wait', flush=True); "
+        "print('password='+os.environ['ZCANARY_ZALLET_PASSWORD'], file=sys.stderr, flush=True); "
+        "time.sleep(5)",
+    ]
+
+    with pytest.raises(pytest.fail.Exception) as exc:
+        module._run_process_with_timeout(
+            "unit timeout",
+            command,
+            cwd=ROOT,
+            env=env,
+            timeout_s=0.1,
+            progress_only=True,
+        )
+    message = str(exc.value)
+    assert "timed out after" in message and "seconds" in message
+    assert "phase=wait" in message
+    assert "<redacted>" in message and password not in message
+    assert "phase=wait" in capsys.readouterr().out
+
+
+def test_spike_has_timestamped_progress_for_slow_phases():
+    script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
+    assert "[ZCANARY-PROGRESS]" in script and "date -u" in script
+    assert 'progress "phase=complete name=$completed_phase"' in script
+    for phase in (
+        "z3-checkout",
+        "stack-reset-prepare",
+        "wallet-rpc-wait",
+        "accounts",
+        "mine-shielded-block",
+        "mine-maturity-blocks",
+        "send-payment",
+        "wait-operation-result",
+    ):
+        assert f"phase=start name={phase}" in script
+        if phase in ("wallet-rpc-wait", "wait-operation-result"):
+            assert f"phase=complete name={phase}" in script
+        else:
+            assert f'complete_phase "{phase}"' in script
+
+
 def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
 
@@ -61,10 +136,13 @@ def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     assert "wallet RPC ready after" in script
     assert "wallet RPC not ready after" in script
     assert script.count("restart rpc-router") == 1
-    assert 'docker compose --env-file .env.regtest ps -a' in script
-    assert 'docker compose --env-file .env.regtest logs --no-color --tail 40' in script
-    assert "for service in zebra zallet rpc-router" in script
-    assert "append_redacted_tail" in script
+    collector = ROOT / "scripts" / "capture-regtest-diagnostics.sh"
+    assert collector.is_file()
+    collector_text = collector.read_text(encoding="utf-8")
+    assert 'docker compose --env-file .env.regtest ps -a' in collector_text
+    assert 'docker compose --env-file .env.regtest logs --no-color --tail 80' in collector_text
+    assert "for service in zebra zallet rpc-router" in collector_text
+    assert "append_redacted_tail" in collector_text
 
 
 def test_wallet_accounts_readiness_requires_null_error_and_list_result(tmp_path):
@@ -177,7 +255,7 @@ def test_rpc_wallet_http_error_is_readable_and_skips_json_parser(tmp_path):
     assert (tmp_path / "diagnostic-calls.txt").read_text(encoding="utf-8") == "captured\n"
 
 
-def test_append_redacted_tail_sanitizes_addresses_hashes_and_keeps_40_lines(tmp_path):
+def test_append_redacted_tail_sanitizes_addresses_hashes_and_keeps_80_lines(tmp_path):
     helper = ROOT / "scripts" / "lib" / "diagnostics.sh"
     fake = tmp_path / "fake-container-logs.sh"
     address = "uregtest1abcdefghijklmnopqrstuvwxyz0123456789"
@@ -209,7 +287,7 @@ exit 3
     rendered = diagnostics.read_text(encoding="utf-8")
     for output in (proc.stderr, rendered):
         assert "fake container logs (exit 3)" in output
-        assert "diagnostic-08" not in output and "diagnostic-09" in output and "diagnostic-45" in output
+        assert "diagnostic-01" in output and "diagnostic-45" in output
         assert env["ZCANARY_ZALLET_PASSWORD"] not in output
         assert address not in output and auth_hash not in output
         assert "<redacted>" in output and "<redacted-auth-hash>" in output
@@ -224,6 +302,44 @@ def test_ci_uploads_wallet_startup_diagnostics_always():
         r"name: Upload redacted wallet startup diagnostics\n\s+if: always\(\)", workflow
     )
     assert "if-no-files-found: ignore" in workflow
+
+
+def test_failure_diagnostics_collector_runs_all_compose_commands_and_redacts(tmp_path):
+    collector = ROOT / "scripts" / "capture-regtest-diagnostics.sh"
+    assert collector.is_file(), "shared regtest diagnostics collector is missing"
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'fake docker args: %s\\n' \"$*\"\n"
+        "printf 'wallet password: %s\\n' \"$ZCANARY_ZALLET_PASSWORD\"\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    compose_dir = tmp_path / "z3"
+    compose_dir.mkdir()
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path}:{env.get('PATH', '')}"
+    env["ZCANARY_ZALLET_PASSWORD"] = "collector-unit-password-not-a-secret"
+    diagnostics = tmp_path / "wallet-startup.log"
+
+    proc = subprocess.run(
+        ["bash", str(collector), str(diagnostics), str(compose_dir)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    rendered = diagnostics.read_text(encoding="utf-8")
+
+    assert proc.returncode == 0
+    assert "docker compose --env-file .env.regtest ps -a" in rendered
+    for service in ("zebra", "zallet", "rpc-router"):
+        assert f"docker compose --env-file .env.regtest logs --no-color --tail 80 {service}" in rendered
+        assert f"fake docker args: compose --env-file .env.regtest logs --no-color --tail 80 {service}" in rendered
+    assert "fake docker args: compose --env-file .env.regtest ps -a" in rendered
+    assert env["ZCANARY_ZALLET_PASSWORD"] not in rendered
+    assert "<redacted>" in rendered
 
 
 def test_run_with_tail_redacts_secrets_and_shows_only_last_20_lines(tmp_path):

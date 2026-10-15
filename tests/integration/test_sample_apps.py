@@ -4,14 +4,20 @@ from __future__ import annotations
 import json
 import os
 import re
+import selectors
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+CLI_SUBPROCESS_TIMEOUT_S = 900
+PREPARE_SUBPROCESS_TIMEOUT_S = 900
+_PROGRESS_LINE_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] \[ZCANARY-PROGRESS\] ")
 CASES = [
     ("clean-shop", set()),
     ("transparent-fallback", {"C2", "C3", "C4b", "MEMO"}),
@@ -22,9 +28,8 @@ CASES = [
 ]
 
 
-def _process_diagnostic(label: str, proc: subprocess.CompletedProcess, env: dict[str, str]) -> str:
-    """Return a compact, redacted status and output tail safe for test failures."""
-    text = "\n".join(part for part in (proc.stdout, proc.stderr) if part)
+def _redact_process_output(text: str, env: dict[str, str]) -> str:
+    """Apply the same secret/canary redactions to live progress and failure tails."""
     for name, secret in env.items():
         if secret and any(
             marker in name.upper()
@@ -41,8 +46,102 @@ def _process_diagnostic(label: str, proc: subprocess.CompletedProcess, env: dict
         text,
         flags=re.IGNORECASE,
     )
+    return text
+
+
+def _process_diagnostic(label: str, proc: subprocess.CompletedProcess, env: dict[str, str]) -> str:
+    """Return a compact, redacted status and output tail safe for test failures."""
+    text = _redact_process_output(
+        "\n".join(part for part in (proc.stdout, proc.stderr) if part), env
+    )
     tail = "\n".join(text.splitlines()[-20:]) or "(no captured output)"
     return f"{label}: exit={proc.returncode}\n{tail}"
+
+
+def _run_process_with_timeout(
+    label: str,
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_s: float,
+    progress_only: bool = False,
+) -> subprocess.CompletedProcess:
+    """Capture all output, optionally stream only timestamped sanitized progress lines."""
+    started = time.monotonic()
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+            start_new_session=(os.name == "posix"),
+        )
+    except OSError as exc:
+        pytest.fail(f"{label}: subprocess could not start ({exc.__class__.__name__})", pytrace=False)
+    if proc.stdout is None:
+        proc.kill()
+        pytest.fail(f"{label}: subprocess output pipe was unavailable", pytrace=False)
+
+    captured = bytearray()
+    pending = bytearray()
+    timed_out = False
+    deadline = started + timeout_s
+
+    def stream_progress(raw_line: bytes) -> None:
+        if not progress_only:
+            return
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r")
+        if _PROGRESS_LINE_RE.match(line):
+            print(_redact_process_output(line, env), flush=True)
+
+    with selectors.DefaultSelector() as selector:
+        selector.register(proc.stdout, selectors.EVENT_READ)
+        while selector.get_map():
+            now = time.monotonic()
+            if not timed_out and now >= deadline and proc.poll() is None:
+                timed_out = True
+                if os.name == "posix":
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    proc.kill()
+            wait_s = 0.1 if timed_out or proc.poll() is not None else max(0.0, min(0.1, deadline - now))
+            for key, _ in selector.select(wait_s):
+                try:
+                    chunk = os.read(key.fd, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    if pending:
+                        stream_progress(bytes(pending))
+                        pending.clear()
+                    continue
+                captured.extend(chunk)
+                pending.extend(chunk)
+                while b"\n" in pending:
+                    line, _, rest = pending.partition(b"\n")
+                    pending[:] = rest
+                    stream_progress(line)
+
+    returncode = proc.wait()
+    elapsed = time.monotonic() - started
+    stdout = captured.decode("utf-8", errors="replace")
+    completed = subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr="")
+    if timed_out:
+        detail = _process_diagnostic(label, completed, env)
+        pytest.fail(
+            f"{label} timed out after {elapsed:.2f} seconds "
+            f"(limit {timeout_s:g} seconds)\n{detail}",
+            pytrace=False,
+        )
+    return completed
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -69,14 +168,13 @@ def integration_preflight():
 def test_example_app_has_exact_expected_failed_checks(name: str, expected_failures: set[str]):
     cfg = ROOT / "examples" / "configs" / f"{name}.toml"
     env = os.environ.copy()
-    proc = subprocess.run(
+    proc = _run_process_with_timeout(
+        f"{name} zcanary CLI",
         [sys.executable, "-m", "zcanary.cli", "run", "--config", str(cfg)],
         cwd=ROOT,
         env=env,
-        capture_output=True,
-        text=True,
-        timeout=1800,
-        check=False,
+        timeout_s=CLI_SUBPROCESS_TIMEOUT_S,
+        progress_only=True,
     )
     diagnostic = _process_diagnostic(f"{name} zcanary CLI", proc, env)
     report_path = ROOT / "out" / "reports" / f"{name}.json"
@@ -127,9 +225,13 @@ def test_beta1_known_bad_fixture_accepts_exact_fullprivacy_cross_pool_call():
             "ZCANARY_CONTEXT_FILE": str(ROOT / "out" / "context.json"),
         }
     )
-    prepare = subprocess.run(
-        ["bash", "scripts/prepare-regtest.sh"], cwd=ROOT, env=env,
-        capture_output=True, text=True, timeout=1800, check=False,
+    prepare = _run_process_with_timeout(
+        "beta.1 prepare-regtest",
+        ["bash", "scripts/prepare-regtest.sh"],
+        cwd=ROOT,
+        env=env,
+        timeout_s=PREPARE_SUBPROCESS_TIMEOUT_S,
+        progress_only=True,
     )
     try:
         assert prepare.returncode == 0, _process_diagnostic("beta.1 prepare-regtest", prepare, env)
@@ -162,9 +264,13 @@ def test_beta3_rejects_exact_fullprivacy_ironwood_to_sapling_call():
             "ZCANARY_CONTEXT_FILE": str(ROOT / "out" / "context.json"),
         }
     )
-    prepare = subprocess.run(
-        ["bash", "scripts/prepare-regtest.sh"], cwd=ROOT, env=env,
-        capture_output=True, text=True, timeout=1800, check=False,
+    prepare = _run_process_with_timeout(
+        "beta.3 prepare-regtest",
+        ["bash", "scripts/prepare-regtest.sh"],
+        cwd=ROOT,
+        env=env,
+        timeout_s=PREPARE_SUBPROCESS_TIMEOUT_S,
+        progress_only=True,
     )
     try:
         assert prepare.returncode == 0, _process_diagnostic("beta.3 prepare-regtest", prepare, env)
