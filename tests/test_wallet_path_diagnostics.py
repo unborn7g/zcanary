@@ -183,6 +183,7 @@ def test_diagnose_workflow_is_manual_bounded_and_always_uploads_diagnostics():
     assert "workflow_dispatch:" in workflow
     assert not re.search(r"(?m)^\s*(?:push|pull_request):", workflow)
     assert "timeout-minutes: 12" in workflow
+    assert 'WALLET_RPC_WAIT_BUDGET: "180"' in workflow
     assert "bash scripts/prepare-regtest.sh" in workflow
     assert "bash scripts/diagnose-wallet-path.sh" in workflow
     assert "secrets.ZCANARY_ZEBRA_PASSWORD" in workflow

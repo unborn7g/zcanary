@@ -142,6 +142,15 @@ begin_phase "z3-checkout"
 git -C z3 fetch -q origin && git -C z3 checkout -q "$Z3_REF"
 cd z3
 complete_phase "z3-checkout"
+if [ "${ZCANARY_ROUTER_LOG_INFO:-0}" = 1 ]; then
+  cat > "$ROOT/z3/docker-compose.regtest.override.yml" <<'YAML'
+services:
+  rpc-router:
+    environment:
+      RUST_LOG: info
+YAML
+  export COMPOSE_FILE=docker-compose.yml:docker-compose.regtest.yml:docker-compose.regtest.override.yml
+fi
 DC="docker compose --env-file .env.regtest"
 begin_phase "regtest-start"
 if [ -z "${KEEP:-}" ]; then
@@ -243,7 +252,16 @@ while :; do
     WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
     WAIT_REMAINING=$(( WAIT_BUDGET - WAIT_ELAPSED ))
     if [ "$WAIT_REMAINING" -gt 0 ]; then
+      [ "$WAIT_REMAINING" -le 10 ] || WAIT_REMAINING=10
       capture_first_failed_wallet_rpc_zallet_logs "$WAIT_REMAINING"
+    fi
+    WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
+    WAIT_REMAINING=$(( WAIT_BUDGET - WAIT_ELAPSED ))
+    if [ "$WAIT_REMAINING" -gt 0 ]; then
+      ZCANARY_DIAGNOSTICS_FILE="$STARTUP_DIAGNOSTICS" \
+        ZCANARY_Z3_DIR="$ROOT/z3" \
+        timeout --kill-after=2s "${WAIT_REMAINING}s" \
+          bash "$ROOT/scripts/diagnose-wallet-path.sh" || true
     fi
   fi
   WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
