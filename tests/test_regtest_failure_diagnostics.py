@@ -160,6 +160,35 @@ def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     assert "append_redacted_tail" in collector_text
 
 
+def test_rpc_script_bounds_connect_and_total_time_with_overridable_max_time():
+    script = (ROOT / "scripts" / "rpc.sh").read_text(encoding="utf-8")
+    assert "RPC_MAX_TIME=${RPC_MAX_TIME:-20}" in script
+    assert "--connect-timeout 5" in script
+    assert '--max-time "$RPC_MAX_TIME"' in script
+    assert "--config <(printf" in script, "keep credentials in curl config, not argv"
+    assert not re.search(r"curl[^\n]*(?:--user|(?:^|\s)-u\s)", script)
+
+
+def test_wallet_readiness_wait_uses_wall_clock_and_reports_last_rpc_status():
+    script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
+    assert 'WAIT_BUDGET=${WALLET_RPC_WAIT_BUDGET:-360}' in script
+    assert 'WAIT_REPORT_INTERVAL=${WALLET_RPC_WAIT_REPORT_INTERVAL:-30}' in script
+    assert 'WAIT_ELAPSED -lt "$WAIT_BUDGET"' in script
+    assert 'wallet RPC attempt ${WAIT_ATTEMPT}: curl exit ${WALLET_RPC_LAST_CURL_EXIT}' in script
+    assert 'HTTP status ${WALLET_RPC_LAST_HTTP_STATUS}' in script
+    assert 'elapsed ${WAIT_ELAPSED}s' in script
+    assert 'WALLET_RPC_LAST_CURL_EXIT' in script
+
+
+def test_first_failed_readiness_probe_snapshots_zallet_logs_before_timeout():
+    script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
+    assert "capture_first_failed_wallet_rpc_zallet_logs" in script
+    assert 'docker compose --env-file .env.regtest logs --no-color --tail 80 zallet' in script
+    assert "FIRST_READINESS_FAILURE_CAPTURED" in script
+    first_probe = script.split("if wallet_accounts_ready", 1)[1].split("done", 1)[0]
+    assert "capture_first_failed_wallet_rpc_zallet_logs" in first_probe
+
+
 def test_wallet_accounts_readiness_requires_null_error_and_list_result(tmp_path):
     helper = ROOT / "scripts" / "lib" / "wallet_rpc.sh"
     fake_rpc = tmp_path / "fake-rpc.sh"
