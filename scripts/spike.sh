@@ -39,6 +39,58 @@ complete_phase() {
   progress "phase=complete name=$completed_phase"
   ACTIVE_PHASE=""
 }
+WAIT_REPORT_PID=""
+WAIT_STATUS_DIR=""
+WAIT_STATUS_FILE=""
+WALLET_RPC_MAX_TIME=""
+start_wallet_rpc_wait_reporter() {
+  WAIT_STATUS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/zcanary-wallet-wait.XXXXXX")
+  WAIT_STATUS_FILE="$WAIT_STATUS_DIR/status"
+  printf '0|pending|unknown|not-started\n' > "$WAIT_STATUS_FILE"
+  python3 - "$WAIT_STATUS_FILE" "$WAIT_START" "$WAIT_REPORT_INTERVAL" <<'PY' &
+from datetime import datetime, timezone
+from pathlib import Path
+import sys
+import time
+
+status_file = Path(sys.argv[1])
+started = int(sys.argv[2])
+interval = float(sys.argv[3])
+while True:
+    time.sleep(interval)
+    try:
+        attempt, curl_exit, http_status, reason = status_file.read_text(encoding="utf-8").strip().split("|", 3)
+    except (OSError, ValueError):
+        attempt, curl_exit, http_status, reason = "?", "unknown", "unknown", "status-unavailable"
+    elapsed = max(0, int(time.time()) - started)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(
+        f"[{timestamp}] [ZCANARY-PROGRESS] wallet RPC attempt {attempt}: "
+        f"curl exit {curl_exit} ({reason}); HTTP status {http_status}; elapsed {elapsed}s",
+        flush=True,
+    )
+PY
+  WAIT_REPORT_PID=$!
+}
+write_wallet_rpc_wait_status() {
+  local temporary="$WAIT_STATUS_FILE.tmp"
+  printf '%s|%s|%s|%s\n' \
+    "$WAIT_ATTEMPT" "$WALLET_RPC_LAST_CURL_EXIT" \
+    "$WALLET_RPC_LAST_HTTP_STATUS" "$WALLET_RPC_LAST_REASON" > "$temporary"
+  mv -f "$temporary" "$WAIT_STATUS_FILE"
+}
+stop_wallet_rpc_wait_reporter() {
+  if [ -n "$WAIT_REPORT_PID" ]; then
+    kill "$WAIT_REPORT_PID" 2>/dev/null || true
+    wait "$WAIT_REPORT_PID" 2>/dev/null || true
+    WAIT_REPORT_PID=""
+  fi
+  if [ -n "$WAIT_STATUS_DIR" ]; then
+    rm -rf "$WAIT_STATUS_DIR"
+    WAIT_STATUS_DIR=""
+    WAIT_STATUS_FILE=""
+  fi
+}
 ACTIVE_PHASE=bootstrap
 DIAGNOSTICS_CAPTURED=0
 capture_wallet_startup_diagnostics() {
@@ -46,11 +98,22 @@ capture_wallet_startup_diagnostics() {
     return 0
   fi
   DIAGNOSTICS_CAPTURED=1
-  bash "$ROOT/scripts/capture-regtest-diagnostics.sh" "$STARTUP_DIAGNOSTICS" "$ROOT/z3" || true
+  timeout --kill-after=5s 60s \
+    bash "$ROOT/scripts/capture-regtest-diagnostics.sh" "$STARTUP_DIAGNOSTICS" "$ROOT/z3" || true
+}
+capture_first_failed_wallet_rpc_zallet_logs() {
+  local remaining_seconds="${1:-30}"
+  append_redacted_tail \
+    "$STARTUP_DIAGNOSTICS" \
+    "first failed readiness probe: docker compose --env-file .env.regtest logs --no-color --tail 80 zallet" \
+    "$ROOT/z3" \
+    timeout --kill-after=1s "${remaining_seconds}s" \
+      docker compose --env-file .env.regtest logs --no-color --tail 80 zallet
 }
 on_exit() {
   local status=$?
   trap - EXIT
+  stop_wallet_rpc_wait_reporter
   if [ "$status" -ne 0 ]; then
     progress "phase=failed name=${ACTIVE_PHASE:-unknown} exit=$status"
     capture_wallet_startup_diagnostics
@@ -138,31 +201,70 @@ $DC ps --format '{{.Service}} {{.Image}}' > "$OUT/images.txt"
 cd "$ROOT"
 complete_phase "regtest-start"
 
-WAIT_ATTEMPTS=120
 WAIT_INTERVAL=3
+WAIT_BUDGET=${WALLET_RPC_WAIT_BUDGET:-360}
+WAIT_REPORT_INTERVAL=${WALLET_RPC_WAIT_REPORT_INTERVAL:-30}
 WAIT_START=$(date +%s)
 WAIT_READY=0
+WAIT_ATTEMPT=0
 ROUTER_RESTARTED=0
 WALLET_RPC_READY=0
+FIRST_READINESS_FAILURE_CAPTURED=0
+WALLET_RPC_LAST_CURL_EXIT=pending
+WALLET_RPC_LAST_HTTP_STATUS=unknown
+WALLET_RPC_LAST_REASON=not-started
 begin_phase "wallet-rpc-wait"
-log "waiting for router + wallet (budget ${WAIT_ATTEMPTS} x ${WAIT_INTERVAL}s)"
-for i in $(seq "$WAIT_ATTEMPTS"); do
-  if wallet_accounts_ready 2>/dev/null; then
+log "waiting for router + wallet (wall-clock budget ${WAIT_BUDGET}s; poll interval ${WAIT_INTERVAL}s)"
+start_wallet_rpc_wait_reporter
+while :; do
+  WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
+  [ "$WAIT_ELAPSED" -lt "$WAIT_BUDGET" ] || break
+  WAIT_REMAINING=$(( WAIT_BUDGET - WAIT_ELAPSED ))
+  PROBE_MAX_TIME=${RPC_MAX_TIME:-20}
+  case "$PROBE_MAX_TIME" in
+    ''|0|*[!0-9]*) PROBE_MAX_TIME=20 ;;
+  esac
+  if [ "$PROBE_MAX_TIME" -gt "$WAIT_REMAINING" ]; then
+    PROBE_MAX_TIME="$WAIT_REMAINING"
+  fi
+  WAIT_ATTEMPT=$((WAIT_ATTEMPT + 1))
+  WALLET_RPC_MAX_TIME="$PROBE_MAX_TIME"
+  if wallet_accounts_ready; then
     WAIT_READY=1
     WALLET_RPC_READY=1
+    WALLET_RPC_MAX_TIME=""
+    write_wallet_rpc_wait_status
     break
   fi
-  if [ "$i" -eq 20 ] && [ "$ROUTER_RESTARTED" -eq 0 ]; then
+  WALLET_RPC_MAX_TIME=""
+  write_wallet_rpc_wait_status
+  if [ "$FIRST_READINESS_FAILURE_CAPTURED" -eq 0 ]; then
+    FIRST_READINESS_FAILURE_CAPTURED=1
+    WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
+    WAIT_REMAINING=$(( WAIT_BUDGET - WAIT_ELAPSED ))
+    if [ "$WAIT_REMAINING" -gt 0 ]; then
+      capture_first_failed_wallet_rpc_zallet_logs "$WAIT_REMAINING"
+    fi
+  fi
+  WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
+  if [ "$WAIT_ELAPSED" -ge 60 ] && [ "$ROUTER_RESTARTED" -eq 0 ]; then
     log "restarting rpc-router once while wallet RPC is unavailable"
-    (cd "$ROOT/z3" && docker compose --env-file .env.regtest restart rpc-router >/dev/null 2>&1) || true
+    WAIT_REMAINING=$(( WAIT_BUDGET - WAIT_ELAPSED ))
+    if [ "$WAIT_REMAINING" -gt 0 ]; then
+      (cd "$ROOT/z3" && timeout --kill-after=1s "${WAIT_REMAINING}s" \
+        docker compose --env-file .env.regtest restart rpc-router >/dev/null 2>&1) || true
+    fi
     ROUTER_RESTARTED=1
   fi
-  if [ "$((i % 20))" -eq 0 ]; then
-    WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
-    log "wallet RPC still not ready after ${WAIT_ELAPSED}s (attempt ${i}/${WAIT_ATTEMPTS})"
+  [ "$WAIT_ELAPSED" -lt "$WAIT_BUDGET" ] || break
+  WAIT_REMAINING=$(( WAIT_BUDGET - WAIT_ELAPSED ))
+  if [ "$WAIT_REMAINING" -lt "$WAIT_INTERVAL" ]; then
+    sleep "$WAIT_REMAINING"
+  else
+    sleep "$WAIT_INTERVAL"
   fi
-  [ "$i" -eq "$WAIT_ATTEMPTS" ] || sleep "$WAIT_INTERVAL"
 done
+stop_wallet_rpc_wait_reporter
 WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
 if [ "$WAIT_READY" -eq 1 ]; then
   log "wallet RPC ready after ${WAIT_ELAPSED}s"
@@ -170,7 +272,9 @@ if [ "$WAIT_READY" -eq 1 ]; then
   ACTIVE_PHASE=""
 else
   capture_wallet_startup_diagnostics
-  printf 'wallet RPC not ready after %s s\n' "$WAIT_ELAPSED" >&2
+  printf 'wallet RPC not ready after %s s (budget %s s; HTTP status %s; curl exit %s (%s))\n' \
+    "$WAIT_ELAPSED" "$WAIT_BUDGET" "$WALLET_RPC_LAST_HTTP_STATUS" \
+    "$WALLET_RPC_LAST_CURL_EXIT" "$WALLET_RPC_LAST_REASON" >&2
   exit 1
 fi
 

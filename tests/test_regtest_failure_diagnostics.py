@@ -139,7 +139,7 @@ def test_spike_has_timestamped_progress_for_slow_phases():
 def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
 
-    assert re.search(r"\bWAIT_ATTEMPTS=120\b", script)
+    assert 'WAIT_BUDGET=${WALLET_RPC_WAIT_BUDGET:-360}' in script
     assert "wallet_accounts_ready" in script
     assert "getwalletinfo" not in script
     assert "WALLET_RPC_READY=1" in script
@@ -148,6 +148,7 @@ def test_wallet_startup_timeout_collects_redacted_compose_diagnostics():
     assert 'progress "phase=failed name=${ACTIVE_PHASE:-unknown} exit=$status"' in script
     timeout_branch = script.split('if [ "$WAIT_READY" -eq 1 ]; then', 1)[1].split("# --- 2. accounts", 1)[0]
     assert "capture_wallet_startup_diagnostics" in timeout_branch
+    assert "exit 1" in timeout_branch
     assert "wallet RPC ready after" in script
     assert "wallet RPC not ready after" in script
     assert script.count("restart rpc-router") == 1
@@ -169,14 +170,29 @@ def test_rpc_script_bounds_connect_and_total_time_with_overridable_max_time():
     assert not re.search(r"curl[^\n]*(?:--user|(?:^|\s)-u\s)", script)
 
 
+def test_rpc_rejects_an_unbounded_zero_max_time():
+    env = os.environ.copy()
+    env.update({"RPC_USER": "unit-user", "RPC_PASS": "unit-test-password-not-a-secret", "RPC_MAX_TIME": "0"})
+    proc = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "rpc.sh"), "http://127.0.0.1:1", "z_listaccounts"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 2
+    assert "RPC_MAX_TIME must be a positive integer" in proc.stderr
+
+
 def test_wallet_readiness_wait_uses_wall_clock_and_reports_last_rpc_status():
     script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
     assert 'WAIT_BUDGET=${WALLET_RPC_WAIT_BUDGET:-360}' in script
     assert 'WAIT_REPORT_INTERVAL=${WALLET_RPC_WAIT_REPORT_INTERVAL:-30}' in script
-    assert 'WAIT_ELAPSED -lt "$WAIT_BUDGET"' in script
-    assert 'wallet RPC attempt ${WAIT_ATTEMPT}: curl exit ${WALLET_RPC_LAST_CURL_EXIT}' in script
-    assert 'HTTP status ${WALLET_RPC_LAST_HTTP_STATUS}' in script
-    assert 'elapsed ${WAIT_ELAPSED}s' in script
+    assert '[ "$WAIT_ELAPSED" -lt "$WAIT_BUDGET" ]' in script
+    assert 'wallet RPC attempt {attempt}: ' in script
+    assert 'f"curl exit {curl_exit} ({reason}); HTTP status {http_status}; elapsed {elapsed}s"' in script
     assert 'WALLET_RPC_LAST_CURL_EXIT' in script
 
 
@@ -220,6 +236,48 @@ printf '%s' "$FAKE_RPC_BODY"
     assert subprocess.run(command, cwd=ROOT, env=env, capture_output=True).returncode == 1
 
 
+def test_wallet_readiness_tracks_http_status_and_actual_curl_exit(tmp_path):
+    helper = ROOT / "scripts" / "lib" / "wallet_rpc.sh"
+    fake_rpc = tmp_path / "fake-rpc.sh"
+    fake_rpc.write_text(
+        """#!/usr/bin/env bash
+printf '%s\\n' "$FAKE_RPC_ERROR" >&2
+exit 22
+""",
+        encoding="utf-8",
+    )
+    fake_rpc.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "RPC": str(fake_rpc),
+            "ROUTER": "http://127.0.0.1:8181",
+            "ZCANARY_ZALLET_USER": "unit-user",
+            "ZCANARY_ZALLET_PASSWORD": "unit-test-password-not-a-secret",
+            "FAKE_RPC_ERROR": "RPC HTTP request expected HTTP 200 (received 201; curl exit 0)",
+        }
+    )
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; if wallet_accounts_ready; then exit 99; fi; '
+            'printf "%s|%s|%s\\n" "$WALLET_RPC_LAST_CURL_EXIT" '
+            '"$WALLET_RPC_LAST_HTTP_STATUS" "$WALLET_RPC_LAST_REASON"',
+            "bash",
+            str(helper),
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    assert proc.stdout == "0|201|http-error\n"
+
+
 def test_rpc_script_rejects_non_200_even_with_a_ready_json_body():
     class CreatedHandler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -254,6 +312,7 @@ def test_rpc_script_rejects_non_200_even_with_a_ready_json_body():
     assert proc.returncode == 22
     assert proc.stdout == ""
     assert "expected HTTP 200" in proc.stderr
+    assert "received 201" in proc.stderr and "curl exit 0" in proc.stderr
 
 
 def test_rpc_wallet_http_error_is_readable_and_skips_json_parser(tmp_path):
