@@ -110,6 +110,15 @@ capture_first_failed_wallet_rpc_zallet_logs() {
     timeout --kill-after=1s "${remaining_seconds}s" \
       docker compose --env-file .env.regtest logs --no-color --tail 80 zallet
 }
+run_wallet_path_diagnostics() {
+  local elapsed_seconds="$1" batch_label="$2" timeout_seconds="${3:-120}"
+  ZCANARY_DIAGNOSTICS_FILE="$STARTUP_DIAGNOSTICS" \
+    ZCANARY_Z3_DIR="$ROOT/z3" \
+    ZCANARY_DIAGNOSTIC_BATCH="$batch_label" \
+    ZCANARY_DIAGNOSTIC_ELAPSED_S="$elapsed_seconds" \
+    timeout --kill-after=2s "${timeout_seconds}s" \
+      bash "$ROOT/scripts/diagnose-wallet-path.sh" || true
+}
 on_exit() {
   local status=$?
   trap - EXIT
@@ -219,6 +228,7 @@ WAIT_ATTEMPT=0
 ROUTER_RESTARTED=0
 WALLET_RPC_READY=0
 FIRST_READINESS_FAILURE_CAPTURED=0
+WALLET_PATH_PROBES_AT_90=0
 WALLET_RPC_LAST_CURL_EXIT=pending
 WALLET_RPC_LAST_HTTP_STATUS=unknown
 WALLET_RPC_LAST_REASON=not-started
@@ -255,13 +265,13 @@ while :; do
       [ "$WAIT_REMAINING" -le 10 ] || WAIT_REMAINING=10
       capture_first_failed_wallet_rpc_zallet_logs "$WAIT_REMAINING"
     fi
-    WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
+  fi
+  WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
+  if [ "$WAIT_ELAPSED" -ge 90 ] && [ "$WALLET_PATH_PROBES_AT_90" -eq 0 ]; then
+    WALLET_PATH_PROBES_AT_90=1
     WAIT_REMAINING=$(( WAIT_BUDGET - WAIT_ELAPSED ))
     if [ "$WAIT_REMAINING" -gt 0 ]; then
-      ZCANARY_DIAGNOSTICS_FILE="$STARTUP_DIAGNOSTICS" \
-        ZCANARY_Z3_DIR="$ROOT/z3" \
-        timeout --kill-after=2s "${WAIT_REMAINING}s" \
-          bash "$ROOT/scripts/diagnose-wallet-path.sh" || true
+      run_wallet_path_diagnostics "$WAIT_ELAPSED" "continued-failure-90s" "$WAIT_REMAINING"
     fi
   fi
   WAIT_ELAPSED=$(( $(date +%s) - WAIT_START ))
@@ -289,6 +299,7 @@ if [ "$WAIT_READY" -eq 1 ]; then
   progress "phase=complete name=wallet-rpc-wait elapsed_s=$WAIT_ELAPSED"
   ACTIVE_PHASE=""
 else
+  run_wallet_path_diagnostics "$WAIT_ELAPSED" "wait-timeout" 120
   capture_wallet_startup_diagnostics
   printf 'wallet RPC not ready after %s s (budget %s s; HTTP status %s; curl exit %s (%s))\n' \
     "$WAIT_ELAPSED" "$WAIT_BUDGET" "$WALLET_RPC_LAST_HTTP_STATUS" \

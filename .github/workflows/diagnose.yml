@@ -35,17 +35,22 @@ jobs:
       - name: Verify Docker availability
         run: docker compose version && docker info
       - name: Prepare disposable Regtest stack
-        run: bash scripts/prepare-regtest.sh
-      - name: Run wallet path probes if not already captured at first failure
+        shell: bash
+        run: |
+          echo "ZCANARY_DIAG_PREPARE_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+          bash scripts/prepare-regtest.sh
+      - name: Run wallet path probes after prepare
         if: always()
         shell: bash
         run: |
-          diagnostics=out/diagnostics/wallet-startup.log
-          if [ -f "$diagnostics" ] && grep -Fq '==> wallet path probes complete' "$diagnostics"; then
-            echo "Wallet path probes were already captured at the first failed readiness probe."
-          else
-            bash scripts/diagnose-wallet-path.sh
+          mkdir -p out/diagnostics
+          elapsed=0
+          if [[ "${ZCANARY_DIAG_PREPARE_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+            elapsed=$(( $(date +%s) - ZCANARY_DIAG_PREPARE_STARTED_EPOCH ))
           fi
+          ZCANARY_DIAGNOSTIC_BATCH=post-prepare \
+          ZCANARY_DIAGNOSTIC_ELAPSED_S="$elapsed" \
+            bash scripts/diagnose-wallet-path.sh
       - name: Upload wallet path diagnostics
         if: always()
         uses: actions/upload-artifact@v4
