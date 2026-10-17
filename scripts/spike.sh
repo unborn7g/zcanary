@@ -151,13 +151,22 @@ begin_phase "z3-checkout"
 git -C z3 fetch -q origin && git -C z3 checkout -q "$Z3_REF"
 cd z3
 complete_phase "z3-checkout"
-if [ "${ZCANARY_ROUTER_LOG_INFO:-0}" = 1 ]; then
-  cat > "$ROOT/z3/docker-compose.regtest.override.yml" <<'YAML'
-services:
-  rpc-router:
-    environment:
-      RUST_LOG: info
-YAML
+ROUTER_LOG_INFO=${ZCANARY_ROUTER_LOG_INFO:-0}
+ZALLET_TOKIO_WORKER_THREADS=${ZCANARY_ZALLET_TOKIO_WORKER_THREADS:-}
+if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] && [[ ! "$ZALLET_TOKIO_WORKER_THREADS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "invalid Zallet Tokio worker-thread count; expected a positive integer" >&2
+  exit 2
+fi
+if [ "$ROUTER_LOG_INFO" = 1 ] || [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; then
+  {
+    printf 'services:\n'
+    if [ "$ROUTER_LOG_INFO" = 1 ]; then
+      printf '  rpc-router:\n    environment:\n      RUST_LOG: info\n'
+    fi
+    if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; then
+      printf '  zallet:\n    environment:\n      TOKIO_WORKER_THREADS: "%s"\n' "$ZALLET_TOKIO_WORKER_THREADS"
+    fi
+  } > "$ROOT/z3/docker-compose.regtest.override.yml"
   export COMPOSE_FILE=docker-compose.yml:docker-compose.regtest.yml:docker-compose.regtest.override.yml
 fi
 DC="docker compose --env-file .env.regtest"

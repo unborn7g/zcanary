@@ -18,11 +18,18 @@ jobs:
           - zallet_name: beta1
             zallet_version: 0.1.0-beta.1
             zallet_image: zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d
+            tokio_worker_threads: ""
             artifact_name: zcanary-wallet-path-diagnostics-beta1
-          - zallet_name: beta3
+          - zallet_name: beta1-threads8
+            zallet_version: 0.1.0-beta.1
+            zallet_image: zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d
+            tokio_worker_threads: "8"
+            artifact_name: zcanary-wallet-path-diagnostics-beta1-threads8
+          - zallet_name: beta3-threads8
             zallet_version: 0.1.0-beta.3
             zallet_image: zodlinc/zallet:v0.1.0-beta.3@sha256:54d1a774317371b1e88c8a54712cdfa4aa7d8f20ae2a0205f9a190e502aef0f6
-            artifact_name: zcanary-wallet-path-diagnostics-beta3
+            tokio_worker_threads: "8"
+            artifact_name: zcanary-wallet-path-diagnostics-beta3-threads8
     env:
       # Reuse the two private-regtest password secrets from the integration job.
       ZCANARY_ZEBRA_PASSWORD: ${{ secrets.ZCANARY_ZEBRA_PASSWORD }}
@@ -35,6 +42,7 @@ jobs:
       Z3_REF: e84ce9fd8e864ff0b2a8a62f6ce14392145db0fb
       Z3_ZALLET_IMAGE: ${{ matrix.zallet_image }}
       ZCANARY_ZALLET_VERSION: ${{ matrix.zallet_version }}
+      ZCANARY_ZALLET_TOKIO_WORKER_THREADS: ${{ matrix.tokio_worker_threads }}
       Z3_ZALLET_RUST_LOG: debug
       ZCANARY_ROUTER_LOG_INFO: "1"
       # Keep this manual diagnostic run short; the normal CI wait remains six minutes.

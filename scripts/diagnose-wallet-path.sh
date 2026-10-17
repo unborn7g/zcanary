@@ -14,6 +14,22 @@ case "$Z3_DIR" in
   /*) ;;
   *) Z3_DIR="$ROOT/$Z3_DIR" ;;
 esac
+BUSYBOX_REF='busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662'
+ZALLET_PROCESS_SNAPSHOT_SCRIPT=$(cat <<'BUSYBOX_SH'
+set -eu
+grep -E '^(Threads|State):' /proc/1/status || true
+for task_dir in /proc/1/task/*; do
+  [ -d "$task_dir" ] || continue
+  task_id=${task_dir##*/}
+  comm=$(cat "$task_dir/comm" 2>/dev/null | tr -cd '[:alnum:]_.:-' || true)
+  state=$(awk '$1 == "State:" { print substr($2, 1, 1); exit }' "$task_dir/status" 2>/dev/null || true)
+  state=$(printf '%s' "$state" | tr -cd 'A-Z' | cut -c1)
+  wchan=$(cat "$task_dir/wchan" 2>/dev/null | tr -cd '[:alnum:]_.:-' || true)
+  printf 'task=%s comm=%s state=%s wchan=%s\n' "$task_id" "${comm:-?}" "${state:-?}" "${wchan:-?}"
+done
+ls -l /proc/1/fd 2>/dev/null || true
+BUSYBOX_SH
+)
 ZALLET_METHODS_FILE=${ZCANARY_ZALLET_METHODS_FILE:-$ROOT/out/diagnostics/zallet-methods.txt}
 case "$ZALLET_METHODS_FILE" in
   /*) ;;
@@ -38,14 +54,23 @@ esac
 DIAGNOSTIC_ELAPSED_S=${ZCANARY_DIAGNOSTIC_ELAPSED_S}
 
 # Z3's pinned .env.regtest sets COMPOSE_FILE explicitly, so create a separate,
-# generated overlay and add it to that list only for the opt-in diagnose run.
-if [ "${ZCANARY_ROUTER_LOG_INFO:-0}" = 1 ] && [ -d "$Z3_DIR" ]; then
-  cat > "$Z3_DIR/docker-compose.regtest.override.yml" <<'YAML'
-services:
-  rpc-router:
-    environment:
-      RUST_LOG: info
-YAML
+# generated overlay for opt-in router logging and/or a Zallet Tokio worker override.
+ROUTER_LOG_INFO=${ZCANARY_ROUTER_LOG_INFO:-0}
+ZALLET_TOKIO_WORKER_THREADS=${ZCANARY_ZALLET_TOKIO_WORKER_THREADS:-}
+if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] && [[ ! "$ZALLET_TOKIO_WORKER_THREADS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "invalid Zallet Tokio worker-thread count; expected a positive integer" >&2
+  exit 2
+fi
+if { [ "$ROUTER_LOG_INFO" = 1 ] || [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; } && [ -d "$Z3_DIR" ]; then
+  {
+    printf 'services:\n'
+    if [ "$ROUTER_LOG_INFO" = 1 ]; then
+      printf '  rpc-router:\n    environment:\n      RUST_LOG: info\n'
+    fi
+    if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; then
+      printf '  zallet:\n    environment:\n      TOKIO_WORKER_THREADS: "%s"\n' "$ZALLET_TOKIO_WORKER_THREADS"
+    fi
+  } > "$Z3_DIR/docker-compose.regtest.override.yml"
   export COMPOSE_FILE=docker-compose.yml:docker-compose.regtest.yml:docker-compose.regtest.override.yml
 fi
 
@@ -143,7 +168,35 @@ append_redacted_head() {
   return 0
 }
 
+capture_docker_cpu_memory_summary() {
+  local raw status
+  if raw=$(timeout --kill-after=1s 10s docker info --format '{{.NCPU}} {{.MemTotal}}'); then
+    python3 - "$raw" <<'PYTHON'
+import re
+import sys
+match = re.fullmatch(r"\s*(\d+)\s+(\d+)\s*", sys.argv[1])
+if match:
+    print(f"NCPU={int(match.group(1))}; MemTotal={int(match.group(2)):,} bytes")
+else:
+    print("NCPU/MemTotal unavailable")
+PYTHON
+  else
+    status=$?
+    return "$status"
+  fi
+}
+
 capture_host_diagnostics() {
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "nproc" \
+    "$Z3_DIR" 10 \
+    nproc
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "grep -c '^processor' /proc/cpuinfo" \
+    "$Z3_DIR" 10 \
+    grep -c '^processor' /proc/cpuinfo
   append_redacted_lines \
     "$DIAGNOSTICS_FILE" \
     "docker version" \
@@ -154,6 +207,11 @@ capture_host_diagnostics() {
     "docker info (first 40 lines)" \
     "$Z3_DIR" 40 \
     timeout --kill-after=1s 10s docker info
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "docker info --format '{{.NCPU}} {{.MemTotal}}'" \
+    "$Z3_DIR" 10 \
+    capture_docker_cpu_memory_summary
   append_redacted_lines \
     "$DIAGNOSTICS_FILE" \
     "uname -a" \
@@ -169,6 +227,36 @@ capture_host_diagnostics() {
     "docker volume inspect z3-regtest-zallet (names and driver only)" \
     "$Z3_DIR" 20 \
     timeout --kill-after=1s 10s docker volume inspect --format '{{.Name}} {{.Driver}}' z3-regtest-zallet
+}
+
+resolve_zallet_container_name() {
+  local container_id container_name
+  container_id=$(cd "$Z3_DIR" && timeout --kill-after=1s 10s \
+    docker compose --env-file .env.regtest ps -q zallet 2>/dev/null) || return 1
+  container_id=${container_id%%$'\n'*}
+  [ -n "$container_id" ] || return 1
+  container_name=$(timeout --kill-after=1s 10s \
+    docker inspect --format '{{.Name}}' "$container_id" 2>/dev/null) || return 1
+  container_name=${container_name#/}
+  [[ "$container_name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || return 1
+  printf '%s\n' "$container_name"
+}
+
+capture_zallet_process_snapshot() {
+  local container_name="$1" phase="$2"
+  if [ -z "$container_name" ]; then
+    printf 'Zallet process snapshot (%s): skipped; container unavailable\n' "$phase" \
+      | tee -a "$DIAGNOSTICS_FILE" >&2 || true
+    return 0
+  fi
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "Zallet process snapshot ($phase)" \
+    "$Z3_DIR" 80 \
+    env "ZCANARY_PROCESS_SNAPSHOT_PHASE=$phase" \
+      timeout --kill-after=1s 10s docker run --rm \
+        --pid=container:$container_name --cap-add SYS_PTRACE \
+        "$BUSYBOX_REF" sh -c "$ZALLET_PROCESS_SNAPSHOT_SCRIPT"
 }
 
 extract_method_names() {
@@ -293,7 +381,7 @@ run_probe() {
   local -a curl_command
 
   case "$max_time" in
-    10|30|60) ;;
+    5|10|30|45|60) ;;
     *) max_time=10 ;;
   esac
   case "$preview_limit" in
@@ -353,8 +441,21 @@ run_probe() {
     | tee -a "$DIAGNOSTICS_FILE"
 }
 
+run_early_z_getnewaccount_probes() {
+  local host_port="$1" attempt
+  for attempt in 1 2 3 4 5 6; do
+    run_probe "early z_getnewaccount (attempt ${attempt}/6)" \
+      "http://127.0.0.1:$host_port" POST z_getnewaccount basic \
+      "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 5 '["early"]' 160
+    if [ "$attempt" -lt 6 ]; then
+      sleep 1
+    fi
+  done
+}
+
 run_wallet_path_probes() {
   local mapping_output mapping_exit mapping_line safe_mapping_line host_port
+  local zallet_container_name inflight_probe_pid
   local wrong_password="zcanary-diagnostic-invalid-password"
   while [ "$wrong_password" = "$ZCANARY_ZALLET_PASSWORD" ] || [ "$wrong_password" = "$ROUTER_PASSWORD" ]; do
     wrong_password="${wrong_password}x"
@@ -365,13 +466,6 @@ run_wallet_path_probes() {
     "$DIAGNOSTIC_BATCH" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     | tee -a "$DIAGNOSTICS_FILE"
   report_wallet_password_sanity | tee -a "$DIAGNOSTICS_FILE"
-  append_redacted_tail \
-    "$DIAGNOSTICS_FILE" \
-    "docker compose --env-file .env.regtest ps" \
-    "$Z3_DIR" \
-    timeout --kill-after=1s 10s docker compose --env-file .env.regtest ps
-  capture_host_diagnostics
-
   if mapping_output=$(cd "$Z3_DIR" && timeout --kill-after=1s 10s \
     docker compose --env-file .env.regtest port zallet 28232 2>/dev/null); then
     mapping_exit=0
@@ -388,6 +482,17 @@ run_wallet_path_probes() {
   printf 'docker compose --env-file .env.regtest port zallet 28232: %s (exit %s)\n' \
     "$safe_mapping_line" "$mapping_exit" | tee -a "$DIAGNOSTICS_FILE"
 
+  # Run this burst as soon as Compose reports the published RPC port.
+  run_early_z_getnewaccount_probes "$host_port"
+  append_redacted_tail \
+    "$DIAGNOSTICS_FILE" \
+    "docker compose --env-file .env.regtest ps" \
+    "$Z3_DIR" \
+    timeout --kill-after=1s 10s docker compose --env-file .env.regtest ps
+  capture_host_diagnostics
+  zallet_container_name=$(resolve_zallet_container_name || true)
+  capture_zallet_process_snapshot "$zallet_container_name" "idle"
+
   run_probe "a. Zebra direct" "http://127.0.0.1:29232" POST getblockchaininfo basic \
     "$NODE_USER" "$ZCANARY_NODE_PASSWORD"
   run_probe "b. Router health" "http://127.0.0.1:8181/health" GET "" none
@@ -399,10 +504,15 @@ run_wallet_path_probes() {
   PROBE_TEMP_FILES+=("$help_response")
   run_probe "d. Zallet direct getwalletinfo (10-second timeout)" "http://127.0.0.1:$host_port" \
     POST getwalletinfo basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 10 '[]' 400
-  run_probe "e. Zallet direct z_listaccounts (empty wallet; 10-second timeout)" "http://127.0.0.1:$host_port" \
+  run_probe "e. Zallet direct z_listaccounts (after early probes; 10-second timeout)" "http://127.0.0.1:$host_port" \
     POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 10 '[]' 400
-  run_probe "f. Zallet direct z_getnewaccount (diag account; 60-second timeout)" "http://127.0.0.1:$host_port" \
-    POST z_getnewaccount basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 60 '["diag"]' 400
+  run_probe "f. Zallet direct z_getnewaccount (diag; in-flight, 45-second timeout)" \
+    "http://127.0.0.1:$host_port" POST z_getnewaccount basic \
+    "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 45 '["diag"]' 400 &
+  inflight_probe_pid=$!
+  sleep 8
+  capture_zallet_process_snapshot "$zallet_container_name" "in-flight z_getnewaccount"
+  wait "$inflight_probe_pid" || true
   run_probe "g. Zallet direct z_listaccounts (after account creation; 60-second timeout)" "http://127.0.0.1:$host_port" \
     POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 60 '[]' 400
   run_probe "h. Zallet direct listaddresses (30-second timeout)" "http://127.0.0.1:$host_port" \
@@ -444,12 +554,6 @@ run_wallet_path_probes() {
     "docker compose --env-file .env.regtest logs --no-color --tail 200 zallet" \
     "$Z3_DIR" 200 \
     timeout --kill-after=1s 10s docker compose --env-file .env.regtest logs --no-color --tail 200 zallet
-  append_redacted_tail \
-    "$DIAGNOSTICS_FILE" \
-    "docker compose --env-file .env.regtest exec -T zallet ls -la /var/lib/zallet" \
-    "$Z3_DIR" \
-    timeout --kill-after=1s 10s docker compose --env-file .env.regtest exec -T zallet ls -la /var/lib/zallet
-
   printf '==> wallet path probes complete batch=%s elapsed=%ss\n' \
     "$DIAGNOSTIC_BATCH" "$DIAGNOSTIC_ELAPSED_S" | tee -a "$DIAGNOSTICS_FILE"
 }
