@@ -13,6 +13,126 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_physical_core_detection_uses_topology_then_cpu_cores_then_one(tmp_path):
+    library = ROOT / "scripts" / "lib" / "diagnostics.sh"
+    fixtures = (
+        (
+            "topology",
+            "processor : 0\nphysical id : 0\ncore id : 0\n"
+            "processor : 1\nphysical id : 0\ncore id : 1\n"
+            "processor : 2\nphysical id : 1\ncore id : 0\n",
+            "3",
+        ),
+        ("cpu-cores", "processor : 0\ncpu cores : 6\n", "6"),
+        ("zero-fallback", "processor : 0\ncpu cores : 0\n", "1"),
+        ("no-topology", "processor : 0\n", "1"),
+    )
+    for name, content, expected in fixtures:
+        cpuinfo = tmp_path / f"{name}.cpuinfo"
+        cpuinfo.write_text(content, encoding="utf-8")
+        proc = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'source "$1"; detect_physical_cpu_cores "$2"',
+                "bash",
+                str(library),
+                str(cpuinfo),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == expected
+
+
+def test_physical_cpu_workaround_policy_and_fake_cpuinfo(tmp_path):
+    library = ROOT / "scripts" / "lib" / "diagnostics.sh"
+    decisions = (("on", "64", "on"), ("off", "1", "off"), ("auto", "1", "on"),
+                 ("auto", "3", "on"), ("auto", "4", "off"), ("auto", "96", "off"))
+    for mode, cores, expected in decisions:
+        proc = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'source "$1"; if physical_cpu_workaround_enabled "$2" "$3"; '
+                'then printf on; else printf off; fi',
+                "bash",
+                str(library),
+                mode,
+                cores,
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == expected
+
+    fake_cpuinfo = tmp_path / "zcanary-fake-cpuinfo"
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; write_zcanary_fake_cpuinfo "$2"',
+            "bash",
+            str(library),
+            str(fake_cpuinfo),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    text = fake_cpuinfo.read_text(encoding="utf-8")
+    blocks = [block for block in text.strip().split("\n\n") if block]
+    assert len(blocks) == 8
+    for processor, block in enumerate(blocks):
+        assert re.search(rf"(?m)^processor\s*:\s*{processor}$", block)
+        assert re.search(r"(?m)^physical id\s*:\s*0$", block)
+        assert re.search(rf"(?m)^core id\s*:\s*{processor}$", block)
+        assert re.search(r"(?m)^siblings\s*:\s*8$", block)
+        assert re.search(r"(?m)^cpu cores\s*:\s*8$", block)
+        assert re.search(r"(?m)^vendor_id\s*:\s*\S+", block)
+        assert re.search(r"(?m)^model name\s*:\s*.+", block)
+
+    detected = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; detect_physical_cpu_cores "$2"',
+            "bash",
+            str(library),
+            str(fake_cpuinfo),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert detected.returncode == 0, detected.stderr
+    assert detected.stdout.strip() == "8"
+
+
+def test_spike_exposes_cpu_workaround_and_mounts_generated_cpuinfo():
+    spike = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
+    assert 'ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND=${ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND:-auto}' in spike
+    assert "detect_physical_cpu_cores /proc/cpuinfo" in spike
+    assert "physical_cpu_workaround_enabled" in spike
+    assert 'write_zcanary_fake_cpuinfo "$ROOT/z3/zcanary-fake-cpuinfo"' in spike
+    assert "./zcanary-fake-cpuinfo:/proc/cpuinfo:ro" in spike
+    assert "Zallet physical CPU workaround active" in spike
+    assert "default DB pool" in spike
+
+
 def test_diagnostic_script_emits_early_probes_and_safe_process_snapshots():
     script_path = ROOT / "scripts" / "diagnose-wallet-path.sh"
     assert script_path.is_file()
@@ -72,6 +192,9 @@ def test_diagnostic_script_emits_early_probes_and_safe_process_snapshots():
     assert "Zallet methods: count=%s; z_listaccounts=%s; z_getnewaccount=%s; listaddresses=%s" in script
     assert "nproc" in script
     assert "grep -c '^processor' /proc/cpuinfo" in script
+    assert "detect_physical_cpu_cores /proc/cpuinfo" in script
+    assert "Zallet fake /proc/cpuinfo bind mount:" in script
+    assert "grep -c '^processor' /proc/1/root/proc/cpuinfo" in script
     assert "docker info --format '{{.NCPU}} {{.MemTotal}}'" in script
     assert "docker info (first 40 lines)" in script
     assert "docker volume inspect --format '{{.Name}} {{.Driver}}' z3-regtest-zallet" in script
@@ -186,6 +309,7 @@ def test_diagnostic_probes_use_actual_port_continue_after_timeout_and_redact_bod
     fake_bin.mkdir()
     compose_dir = tmp_path / "z3"
     compose_dir.mkdir()
+    (compose_dir / "zcanary-fake-cpuinfo").write_text("test cpuinfo\n", encoding="utf-8")
     trace = tmp_path / "curl-trace.jsonl"
     output = tmp_path / "wallet-startup.log"
     methods_output = tmp_path / "zallet-methods.txt"
@@ -336,6 +460,9 @@ elif args[-3:] == ["ps", "-q", "zallet"]:
     print(os.environ["FAKE_CONTAINER_ID"])
 elif args == ["inspect", "--format", "{{.Name}}", os.environ["FAKE_CONTAINER_ID"]]:
     print("/z3-regtest-zallet-1")
+elif args[:2] == ["inspect", "--format"] and args[2] == '{{range .Mounts}}{{if eq .Destination "/proc/cpuinfo"}}{{.Source}}{{end}}{{end}}':
+    if os.environ.get("FAKE_CPUINFO_MOUNT") == "yes":
+        print("/home/runner/work/ZCanary/z3/zcanary-fake-cpuinfo")
 elif args[:1] == ["run"]:
     phase = os.environ.get("ZCANARY_PROCESS_SNAPSHOT_PHASE", "missing")
     started = Path(os.environ["INFLIGHT_STARTED_FILE"]).exists()
@@ -346,6 +473,7 @@ elif args[:1] == ["run"]:
     print("Threads: 5")
     print("task=1 comm=zallet state=S wchan=futex_wait_queue")
     print("task=2 comm=tokio-runtime-w state=S wchan=ep_poll")
+    print("Zallet /proc/cpuinfo processor count via /proc/1/root/proc/cpuinfo: 8")
     print("lrwxrwxrwx 1 root root 64 /proc/1/fd/3 -> /dev/null")
 elif args[-3:] == ["port", "zallet", "28232"]:
     print("0.0.0.0:55032")
@@ -433,8 +561,10 @@ print("/dev/sda1 20G 8G 12G 40% /var/lib/docker")
             "INFLIGHT_STARTED_FILE": str(inflight_started),
             "INFLIGHT_DONE_FILE": str(inflight_done),
             "FAKE_CONTAINER_ID": fake_container_id,
+            "FAKE_CPUINFO_MOUNT": "yes",
             "ZLIST_COUNTER_FILE": str(tmp_path / "zlist-counter"),
             "ZCANARY_ZALLET_TOKIO_WORKER_THREADS": "8",
+            "ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND": "on",
             "ZCANARY_ROUTER_LOG_INFO": "1",
             "FULL_ADDRESS": full_address,
             "ZCANARY_DIAGNOSTICS_FILE": str(output),
@@ -533,6 +663,9 @@ print("/dev/sda1 20G 8G 12G 40% /var/lib/docker")
     assert re.search(r"==> nproc \(exit 0\);.*\n4\n", rendered)
     nproc_labels = {line for line in rendered.splitlines() if line.startswith("==> nproc ")}
     assert len(nproc_labels) == 1
+    assert re.search(r"Host physical CPU cores detected: [1-9][0-9]*", rendered)
+    assert "Zallet fake /proc/cpuinfo bind mount: yes" in rendered
+    assert "Zallet /proc/cpuinfo processor count via /proc/1/root/proc/cpuinfo: 8" in rendered
     assert "grep -c '^processor' /proc/cpuinfo" in rendered
     assert re.search(r"==> grep -c '\^processor' /proc/cpuinfo \(exit 0\);.*\n[0-9]+\n", rendered)
     assert "docker info --format '{{.NCPU}} {{.MemTotal}}' (exit 0)" in rendered
@@ -601,6 +734,8 @@ print("/dev/sda1 20G 8G 12G 40% /var/lib/docker")
         "    environment:\n"
         "      RUST_LOG: info\n"
         "  zallet:\n"
+        "    volumes:\n"
+        "      - ./zcanary-fake-cpuinfo:/proc/cpuinfo:ro\n"
         "    environment:\n"
         "      TOKIO_WORKER_THREADS: \"8\"\n"
     )
@@ -611,10 +746,13 @@ print("/dev/sda1 20G 8G 12G 40% /var/lib/docker")
     assert docker_calls.count(["volume", "inspect", "--format", "{{.Name}} {{.Driver}}", "z3-regtest-zallet"]) == 1
     assert docker_calls.count(["compose", "--env-file", ".env.regtest", "ps", "-q", "zallet"]) == 1
     assert docker_calls.count(["inspect", "--format", "{{.Name}}", fake_container_id]) == 1
+    cpuinfo_mount_format = '{{range .Mounts}}{{if eq .Destination "/proc/cpuinfo"}}{{.Source}}{{end}}{{end}}'
+    assert docker_calls.count(["inspect", "--format", cpuinfo_mount_format, "z3-regtest-zallet-1"]) == 1
     helper_calls = [call for call in docker_calls if call[:1] == ["run"]]
     assert len(helper_calls) == 2
     assert all("--cap-add" in call and "SYS_PTRACE" in call for call in helper_calls)
     assert all(any(arg.startswith("--pid=container:") for arg in call) for call in helper_calls)
+    assert all("/proc/1/root/proc/cpuinfo" in call[-1] for call in helper_calls)
     assert not any("exec" in call for call in docker_calls)
     compose_files = [json.loads(line) for line in compose_trace.read_text(encoding="utf-8").splitlines()]
     expected_compose_file = "docker-compose.yml:docker-compose.regtest.yml:docker-compose.regtest.override.yml"
@@ -698,7 +836,7 @@ def test_spike_runs_path_probes_at_90_seconds_and_again_on_timeout():
     assert "elapsed=${ZCANARY_DIAGNOSTIC_ELAPSED_S}" in (ROOT / "scripts" / "diagnose-wallet-path.sh").read_text()
 
 
-def test_diagnose_run_generates_untracked_router_and_zallet_thread_overrides():
+def test_diagnose_run_preserves_cpuinfo_and_existing_router_thread_overrides():
     spike = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
     diagnostic = (ROOT / "scripts" / "diagnose-wallet-path.sh").read_text(encoding="utf-8")
     for script in (spike, diagnostic):
@@ -706,6 +844,8 @@ def test_diagnose_run_generates_untracked_router_and_zallet_thread_overrides():
         assert "RUST_LOG: info" in script
         assert 'TOKIO_WORKER_THREADS: "%s"' in script
         assert "ZCANARY_ZALLET_TOKIO_WORKER_THREADS" in script
+        assert "ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND" in script
+        assert "./zcanary-fake-cpuinfo:/proc/cpuinfo:ro" in script
         assert "COMPOSE_FILE=docker-compose.yml:docker-compose.regtest.yml:docker-compose.regtest.override.yml" in script
     assert spike.index('TOKIO_WORKER_THREADS: "%s"') < spike.index('DC="docker compose')
     assert diagnostic.index("export COMPOSE_FILE=") < diagnostic.index("run_wallet_path_probes()")
@@ -725,17 +865,19 @@ def test_diagnose_workflow_is_manual_bounded_matrix_and_always_uploads_diagnosti
     assert re.search(r"(?m)^\s+matrix:", workflow)
     assert workflow.count("zallet_name:") == 3
     assert "zallet_name: beta1" in workflow
-    assert "zallet_name: beta1-threads8" in workflow
-    assert "zallet_name: beta3-threads8" in workflow
+    assert "zallet_name: beta1-cpufix" in workflow
+    assert "zallet_name: beta3-cpufix" in workflow
     assert "artifact_name: zcanary-wallet-path-diagnostics-beta1" in workflow
-    assert "artifact_name: zcanary-wallet-path-diagnostics-beta1-threads8" in workflow
-    assert "artifact_name: zcanary-wallet-path-diagnostics-beta3-threads8" in workflow
+    assert "artifact_name: zcanary-wallet-path-diagnostics-beta1-cpufix" in workflow
+    assert "artifact_name: zcanary-wallet-path-diagnostics-beta3-cpufix" in workflow
     assert workflow.count("artifact_name:") == 3
     assert "zallet_name: beta3\n" not in workflow
     assert "artifact_name: zcanary-wallet-path-diagnostics-beta3\n" not in workflow
-    assert workflow.count('tokio_worker_threads: ""') == 1
-    assert workflow.count('tokio_worker_threads: "8"') == 2
-    assert "ZCANARY_ZALLET_TOKIO_WORKER_THREADS: ${{ matrix.tokio_worker_threads }}" in workflow
+    assert "threads8" not in workflow
+    assert workflow.count('physical_cpu_workaround: "off"') == 1
+    assert workflow.count('physical_cpu_workaround: "on"') == 2
+    assert "ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND: ${{ matrix.physical_cpu_workaround }}" in workflow
+    assert "ZCANARY_ZALLET_TOKIO_WORKER_THREADS" not in workflow
     assert "zallet_version: 0.1.0-beta.1" in workflow and "zallet_version: 0.1.0-beta.3" in workflow
     assert "zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d" in workflow
     assert "zodlinc/zallet:v0.1.0-beta.3@sha256:54d1a774317371b1e88c8a54712cdfa4aa7d8f20ae2a0205f9a190e502aef0f6" in workflow
@@ -759,3 +901,23 @@ def test_diagnose_workflow_is_manual_bounded_matrix_and_always_uploads_diagnosti
     assert "Z3_ZALLET_IMAGE=${Z3_ZALLET_IMAGE:-zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d}" in spike
     assert 'version == "0.1.0-beta.3" and "allow_insecure_remote_bind" not in text' in spike
     assert 'allow_insecure_remote_bind = true' in spike
+
+
+def test_ci_runner_note_explains_the_db_pool_issue_and_scoped_workaround():
+    path = ROOT / "docs" / "ci-runner-note.md"
+    assert path.is_file()
+    note = path.read_text(encoding="utf-8").lower()
+    for phrase in (
+        "four long-lived sync tasks",
+        "physical cores × 4",
+        "wallet database",
+        "auto",
+        "on",
+        "off",
+        "8-core",
+        "disposable regtest",
+        "not a production fix",
+    ):
+        assert phrase in note
+    assert "zcanary_zebra_password=" not in note
+    assert "zcanary_zallet_password=" not in note

@@ -27,6 +27,8 @@ for task_dir in /proc/1/task/*; do
   wchan=$(cat "$task_dir/wchan" 2>/dev/null | tr -cd '[:alnum:]_.:-' || true)
   printf 'task=%s comm=%s state=%s wchan=%s\n' "$task_id" "${comm:-?}" "${state:-?}" "${wchan:-?}"
 done
+target_cpuinfo_processors=$(grep -c '^processor' /proc/1/root/proc/cpuinfo 2>/dev/null || true)
+printf 'Zallet /proc/cpuinfo processor count via /proc/1/root/proc/cpuinfo: %s\n' "${target_cpuinfo_processors:-unavailable}"
 ls -l /proc/1/fd 2>/dev/null || true
 BUSYBOX_SH
 )
@@ -54,26 +56,43 @@ esac
 DIAGNOSTIC_ELAPSED_S=${ZCANARY_DIAGNOSTIC_ELAPSED_S}
 
 # Z3's pinned .env.regtest sets COMPOSE_FILE explicitly, so create a separate,
-# generated overlay for opt-in router logging and/or a Zallet Tokio worker override.
+# generated overlay for opt-in router logging, worker settings, and the CPU-info mount.
 ROUTER_LOG_INFO=${ZCANARY_ROUTER_LOG_INFO:-0}
 ZALLET_TOKIO_WORKER_THREADS=${ZCANARY_ZALLET_TOKIO_WORKER_THREADS:-}
+ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND=${ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND:-auto}
 if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] && [[ ! "$ZALLET_TOKIO_WORKER_THREADS" =~ ^[1-9][0-9]*$ ]]; then
   echo "invalid Zallet Tokio worker-thread count; expected a positive integer" >&2
   exit 2
 fi
-if { [ "$ROUTER_LOG_INFO" = 1 ] || [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; } && [ -d "$Z3_DIR" ]; then
+case "$ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND" in
+  auto|on|off) ;;
+  *) echo "invalid Zallet physical CPU workaround; expected auto, on, or off" >&2; exit 2 ;;
+esac
+ZALLET_HOST_PHYSICAL_CORES=$(detect_physical_cpu_cores /proc/cpuinfo)
+ZALLET_CPUINFO_WORKAROUND_ENABLED=0
+if physical_cpu_workaround_enabled "$ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND" "$ZALLET_HOST_PHYSICAL_CORES" \
+  && [ -s "$Z3_DIR/zcanary-fake-cpuinfo" ]; then
+  ZALLET_CPUINFO_WORKAROUND_ENABLED=1
+fi
+if { [ "$ROUTER_LOG_INFO" = 1 ] || [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] \
+  || [ "$ZALLET_CPUINFO_WORKAROUND_ENABLED" = 1 ]; } && [ -d "$Z3_DIR" ]; then
   {
     printf 'services:\n'
     if [ "$ROUTER_LOG_INFO" = 1 ]; then
       printf '  rpc-router:\n    environment:\n      RUST_LOG: info\n'
     fi
-    if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; then
-      printf '  zallet:\n    environment:\n      TOKIO_WORKER_THREADS: "%s"\n' "$ZALLET_TOKIO_WORKER_THREADS"
+    if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] || [ "$ZALLET_CPUINFO_WORKAROUND_ENABLED" = 1 ]; then
+      printf '  zallet:\n'
+      if [ "$ZALLET_CPUINFO_WORKAROUND_ENABLED" = 1 ]; then
+        printf '    volumes:\n      - ./zcanary-fake-cpuinfo:/proc/cpuinfo:ro\n'
+      fi
+      if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; then
+        printf '    environment:\n      TOKIO_WORKER_THREADS: "%s"\n' "$ZALLET_TOKIO_WORKER_THREADS"
+      fi
     fi
   } > "$Z3_DIR/docker-compose.regtest.override.yml"
   export COMPOSE_FILE=docker-compose.yml:docker-compose.regtest.yml:docker-compose.regtest.override.yml
 fi
-
 PROBE_TEMP_FILES=()
 cleanup_probe_temp_files() {
   if ((${#PROBE_TEMP_FILES[@]})); then
@@ -187,6 +206,9 @@ PYTHON
 }
 
 capture_host_diagnostics() {
+  printf 'Host physical CPU cores detected: %s; Zallet physical CPU workaround mode=%s\n' \
+    "$ZALLET_HOST_PHYSICAL_CORES" "$ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND" \
+    | tee -a "$DIAGNOSTICS_FILE" >&2 || true
   append_redacted_lines \
     "$DIAGNOSTICS_FILE" \
     "nproc" \
@@ -240,6 +262,25 @@ resolve_zallet_container_name() {
   container_name=${container_name#/}
   [[ "$container_name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || return 1
   printf '%s\n' "$container_name"
+}
+
+report_zallet_cpuinfo_mount() {
+  local container_name="$1" mount_source mount_status
+  if [ -z "$container_name" ]; then
+    mount_status=unavailable
+  elif mount_source=$(timeout --kill-after=1s 10s \
+    docker inspect --format '{{range .Mounts}}{{if eq .Destination "/proc/cpuinfo"}}{{.Source}}{{end}}{{end}}' \
+      "$container_name" 2>/dev/null); then
+    if [ "${mount_source##*/}" = zcanary-fake-cpuinfo ]; then
+      mount_status=yes
+    else
+      mount_status=no
+    fi
+  else
+    mount_status=unknown
+  fi
+  printf 'Zallet fake /proc/cpuinfo bind mount: %s\n' "$mount_status" \
+    | tee -a "$DIAGNOSTICS_FILE" >&2 || true
 }
 
 capture_zallet_process_snapshot() {
@@ -491,6 +532,7 @@ run_wallet_path_probes() {
     timeout --kill-after=1s 10s docker compose --env-file .env.regtest ps
   capture_host_diagnostics
   zallet_container_name=$(resolve_zallet_container_name || true)
+  report_zallet_cpuinfo_mount "$zallet_container_name"
   capture_zallet_process_snapshot "$zallet_container_name" "idle"
 
   run_probe "a. Zebra direct" "http://127.0.0.1:29232" POST getblockchaininfo basic \

@@ -151,20 +151,40 @@ begin_phase "z3-checkout"
 git -C z3 fetch -q origin && git -C z3 checkout -q "$Z3_REF"
 cd z3
 complete_phase "z3-checkout"
+ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND=${ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND:-auto}
+case "$ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND" in
+  auto|on|off) ;;
+  *) echo "invalid Zallet physical CPU workaround; expected auto, on, or off" >&2; exit 2 ;;
+esac
+ZALLET_HOST_PHYSICAL_CORES=$(detect_physical_cpu_cores /proc/cpuinfo)
+if physical_cpu_workaround_enabled "$ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND" "$ZALLET_HOST_PHYSICAL_CORES"; then
+  ZALLET_CPUINFO_WORKAROUND_ENABLED=1
+  write_zcanary_fake_cpuinfo "$ROOT/z3/zcanary-fake-cpuinfo"
+  log "Zallet physical CPU workaround active: mode=$ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND; host reports $ZALLET_HOST_PHYSICAL_CORES physical cores; on a one-core runner, four long-lived sync tasks occupy the default DB pool (four connections on one-core runners), so the mounted 8-core /proc/cpuinfo view gives Zallet 32 connections."
+else
+  ZALLET_CPUINFO_WORKAROUND_ENABLED=0
+  log "Zallet physical CPU workaround inactive: mode=$ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND; host reports $ZALLET_HOST_PHYSICAL_CORES physical cores."
+fi
 ROUTER_LOG_INFO=${ZCANARY_ROUTER_LOG_INFO:-0}
 ZALLET_TOKIO_WORKER_THREADS=${ZCANARY_ZALLET_TOKIO_WORKER_THREADS:-}
 if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] && [[ ! "$ZALLET_TOKIO_WORKER_THREADS" =~ ^[1-9][0-9]*$ ]]; then
   echo "invalid Zallet Tokio worker-thread count; expected a positive integer" >&2
   exit 2
 fi
-if [ "$ROUTER_LOG_INFO" = 1 ] || [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; then
+if [ "$ROUTER_LOG_INFO" = 1 ] || [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] || [ "$ZALLET_CPUINFO_WORKAROUND_ENABLED" = 1 ]; then
   {
     printf 'services:\n'
     if [ "$ROUTER_LOG_INFO" = 1 ]; then
       printf '  rpc-router:\n    environment:\n      RUST_LOG: info\n'
     fi
-    if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; then
-      printf '  zallet:\n    environment:\n      TOKIO_WORKER_THREADS: "%s"\n' "$ZALLET_TOKIO_WORKER_THREADS"
+    if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] || [ "$ZALLET_CPUINFO_WORKAROUND_ENABLED" = 1 ]; then
+      printf '  zallet:\n'
+      if [ "$ZALLET_CPUINFO_WORKAROUND_ENABLED" = 1 ]; then
+        printf '    volumes:\n      - ./zcanary-fake-cpuinfo:/proc/cpuinfo:ro\n'
+      fi
+      if [ -n "$ZALLET_TOKIO_WORKER_THREADS" ]; then
+        printf '    environment:\n      TOKIO_WORKER_THREADS: "%s"\n' "$ZALLET_TOKIO_WORKER_THREADS"
+      fi
     fi
   } > "$ROOT/z3/docker-compose.regtest.override.yml"
   export COMPOSE_FILE=docker-compose.yml:docker-compose.regtest.yml:docker-compose.regtest.override.yml

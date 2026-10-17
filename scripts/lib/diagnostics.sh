@@ -57,3 +57,60 @@ append_redacted_tail() {
   rm -f "$log_file"
   return 0
 }
+
+# Count unique physical socket/core pairs, using cpu cores only when topology is
+# unavailable. A final one-core default keeps the CI policy deterministic.
+detect_physical_cpu_cores() {
+  local cpuinfo="${1:-/proc/cpuinfo}" count fallback
+  count=$(awk '/^physical id/{p=$4} /^core id/{print p"-"$4}' "$cpuinfo" 2>/dev/null | sort -u | wc -l) || count=0
+  count=${count//[[:space:]]/}
+  if [[ ! "$count" =~ ^[0-9]+$ ]] || ((count == 0)); then
+    fallback=$(awk -F: '/^cpu cores[[:space:]]*:/ {gsub(/[[:space:]]/, "", $2); if ($2 ~ /^[0-9]+$/) {print $2; exit}}' "$cpuinfo" 2>/dev/null) || fallback=""
+    count="$fallback"
+  fi
+  if [[ ! "$count" =~ ^[1-9][0-9]*$ ]]; then
+    count=1
+  fi
+  printf '%s\n' "$count"
+}
+
+physical_cpu_workaround_enabled() {
+  local mode="${1:-auto}" cores="${2:-1}"
+  case "$mode" in
+    on) return 0 ;;
+    off) return 1 ;;
+    auto)
+      if [[ "$cores" =~ ^[0-9]+$ ]] && ((cores < 4)); then
+        return 0
+      fi
+      return 1
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+write_zcanary_fake_cpuinfo() {
+  local output="$1" processor
+  : > "$output"
+  for processor in 0 1 2 3 4 5 6 7; do
+    cat >> "$output" <<CPUINFO
+processor : $processor
+vendor_id : GenuineIntel
+cpu family : 6
+model : 85
+model name : Intel(R) Xeon(R) Platinum 8171M CPU @ 2.60GHz
+stepping : 4
+microcode : 0x1
+cpu MHz : 2600.000
+cache size : 36608 KB
+physical id : 0
+siblings : 8
+core id : $processor
+cpu cores : 8
+apicid : $processor
+initial apicid : $processor
+
+CPUINFO
+  done
+  chmod 644 "$output"
+}
