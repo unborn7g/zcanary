@@ -90,10 +90,85 @@ append_redacted_lines() {
   fi
   {
     printf '==> %s (exit %s); last %s output lines follow\n' "$label" "$status" "$line_count"
-    tail -n "$line_count" -- "$log_file" | redact_diagnostic
+    tail -n "$line_count" -- "$log_file" | redact_sensitive_diagnostic
   } | tee -a "$output_file" >&2 || true
   rm -f "$log_file"
   return 0
+}
+
+redact_sensitive_diagnostic() {
+  redact_diagnostic | python3 -c 'import base64,os,re,sys
+text=sys.stdin.read()
+for name,secret in os.environ.items():
+    if secret and any(part in name.upper() for part in ("COOKIE","SEED","KEY","PASS","TOKEN","SECRET","HASH")):
+        encoded=secret.encode("utf-8")
+        for value in (secret, encoded.hex(), encoded.hex().upper(), base64.b64encode(encoded).decode("ascii")):
+            text=text.replace(value, "<redacted>")
+text=re.sub(r"(?i)(https?://)[^/\s@]+@", r"\1<redacted>@", text)
+lines=[]
+for line in text.splitlines(keepends=True):
+    if re.search(r"(?i)(?:cookie|seed|mnemonic|passphrase|secret|(?:private|wallet|access|api)[\s_-]*key|\bkey\b|token|authorization)", line):
+        lines.append("<redacted-sensitive-line>\n")
+    elif re.search(r"(?i)\b(?:password|passwd|passphrase)\s*[:=]", line):
+        lines.append("<redacted-sensitive-line>\n")
+    else:
+        line=re.sub(r"(?i)(\b(?:git commit|commit|hash|digest|id)\s*[:=]\s*)[^\s,;]+", r"\1<redacted-hash>", line)
+        line=re.sub(r"(?<![A-Za-z0-9])[0-9a-f]{7,}(?![A-Za-z0-9])", "<redacted-hash>", line, flags=re.I)
+        lines.append(line)
+sys.stdout.write("".join(lines))'
+}
+
+append_redacted_tail() {
+  local output_file="$1" label="$2" working_dir="$3"
+  shift 3
+  append_redacted_lines "$output_file" "$label" "$working_dir" 80 "$@"
+}
+
+append_redacted_head() {
+  local output_file="$1" label="$2" working_dir="$3" line_count="$4"
+  shift 4
+  local log_file status
+  mkdir -p "$(dirname "$output_file")"
+  log_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-diagnostics.XXXXXX") || return 0
+  if (cd "$working_dir" && "$@") >"$log_file" 2>&1; then
+    status=0
+  else
+    status=$?
+  fi
+  {
+    printf '==> %s (exit %s); first %s output lines follow\n' "$label" "$status" "$line_count"
+    head -n "$line_count" -- "$log_file" | redact_sensitive_diagnostic
+  } | tee -a "$output_file" >&2 || true
+  rm -f "$log_file"
+  return 0
+}
+
+capture_host_diagnostics() {
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "docker version" \
+    "$Z3_DIR" 80 \
+    timeout --kill-after=1s 10s docker version
+  append_redacted_head \
+    "$DIAGNOSTICS_FILE" \
+    "docker info (first 40 lines)" \
+    "$Z3_DIR" 40 \
+    timeout --kill-after=1s 10s docker info
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "uname -a" \
+    "$Z3_DIR" 20 \
+    uname -a
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "df -h /var/lib/docker" \
+    "$Z3_DIR" 20 \
+    df -h /var/lib/docker
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "docker volume inspect z3-regtest-zallet (names and driver only)" \
+    "$Z3_DIR" 20 \
+    timeout --kill-after=1s 10s docker volume inspect --format '{{.Name}} {{.Driver}}' z3-regtest-zallet
 }
 
 extract_method_names() {
@@ -174,55 +249,19 @@ for name in names(document):
 PYTHON
 }
 
-capture_zallet_rpc_document() {
-  local label="$1" method="$2" host_port="$3" body_file="$4"
-  local metadata_file curl_error_file config_file json_body
-  local curl_exit=0 http_status=000 elapsed=unknown escaped_user escaped_password
-  local -a curl_command
-
-  metadata_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-meta.XXXXXX")
-  curl_error_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-error.XXXXXX")
-  config_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-config.XXXXXX")
-  PROBE_TEMP_FILES+=("$metadata_file" "$curl_error_file" "$config_file")
-  chmod 600 "$config_file"
-  escaped_user=$(escape_curl_config "$WALLET_USER")
-  escaped_password=$(escape_curl_config "$ZCANARY_ZALLET_PASSWORD")
-  printf 'user = "%s:%s"\n' "$escaped_user" "$escaped_password" > "$config_file"
-  json_body=$(printf '{"jsonrpc":"2.0","id":1,"method":"%s","params":[]}' "$method")
-  curl_command=(curl --disable --connect-timeout 5 --max-time 10 -sS \
-    -o "$body_file" -w '%{http_code} %{time_total}' --config "$config_file" \
-    -X POST -H 'Content-Type: application/json' -d "$json_body" \
-    "http://127.0.0.1:$host_port")
-
-  if "${curl_command[@]}" > "$metadata_file" 2> "$curl_error_file"; then
-    curl_exit=0
-  else
-    curl_exit=$?
-  fi
-  if read -r http_status elapsed < "$metadata_file"; then
-    :
-  fi
-  [[ "$http_status" =~ ^[0-9]{3}$ ]] || http_status=000
-  [[ "$elapsed" =~ ^[0-9]+([.][0-9]+)?$ ]] || elapsed=unknown
-  printf '%s: HTTP status=%s; curl exit=%s; seconds=%s\n' \
-    "$label" "$http_status" "$curl_exit" "$elapsed" \
-    | tee -a "$DIAGNOSTICS_FILE"
-}
-
 capture_zallet_method_names() {
-  local host_port="$1" help_file discover_file help_names discover_names selected_names sorted_file
+  local host_port="$1" help_file="$2" discover_file help_names discover_names selected_names sorted_file
   local count has_z_listaccounts=no has_z_getnewaccount=no has_listaddresses=no
 
-  help_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-help.XXXXXX")
   discover_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-discover.XXXXXX")
   help_names=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-help-names.XXXXXX")
   discover_names=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-discover-names.XXXXXX")
   selected_names=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-methods.XXXXXX")
   sorted_file=$(mktemp "$(dirname "$ZALLET_METHODS_FILE")/.zallet-methods.XXXXXX")
-  PROBE_TEMP_FILES+=("$help_file" "$discover_file" "$help_names" "$discover_names" "$selected_names" "$sorted_file")
+  PROBE_TEMP_FILES+=("$discover_file" "$help_names" "$discover_names" "$selected_names" "$sorted_file")
 
-  capture_zallet_rpc_document "method-name help" help "$host_port" "$help_file"
-  capture_zallet_rpc_document "method-name rpc.discover" rpc.discover "$host_port" "$discover_file"
+  run_probe "method-name rpc.discover" "http://127.0.0.1:$host_port" \
+    POST rpc.discover basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 30 '[]' 400 "$discover_file"
   extract_method_names "$discover_file" > "$discover_names" || true
   extract_method_names "$help_file" > "$help_names" || true
   if [ -s "$discover_names" ]; then
@@ -247,14 +286,19 @@ run_probe() {
   local label="$1" url="$2" verb="$3" rpc_method="$4" auth_mode="$5"
   local auth_user="${6:-}" auth_password="${7:-}"
   local max_time="${8:-10}" params_json="${9:-[]}"
+  local preview_limit="${10:-160}" response_copy="${11:-}"
   local body_file metadata_file curl_error_file config_file="" json_body=""
   local curl_exit=0 http_status=000 elapsed=unknown preview="" interpretation=""
   local escaped_user escaped_password
   local -a curl_command
 
   case "$max_time" in
-    10|60) ;;
+    10|30|60) ;;
     *) max_time=10 ;;
+  esac
+  case "$preview_limit" in
+    160|400) ;;
+    *) preview_limit=160 ;;
   esac
   body_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-body.XXXXXX")
   metadata_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-meta.XXXXXX")
@@ -288,13 +332,16 @@ run_probe() {
   fi
   [[ "$http_status" =~ ^[0-9]{3}$ ]] || http_status=000
   [[ "$elapsed" =~ ^[0-9]+([.][0-9]+)?$ ]] || elapsed=unknown
-  if preview=$(redact_diagnostic < "$body_file" | python3 -c 'import sys; text=sys.stdin.read()[:160]; print("".join(" " if ord(ch)<32 or ord(ch) in (127, 0x2028, 0x2029) else ch for ch in text))'); then
+  if [ -n "$response_copy" ]; then
+    cp -- "$body_file" "$response_copy"
+  fi
+  if preview=$(redact_sensitive_diagnostic < "$body_file" | python3 -c 'import sys; text=sys.stdin.read()[:int(sys.argv[1])]; print("".join(" " if ord(ch)<32 or ord(ch) in (127, 0x2028, 0x2029) else ch for ch in text))' "$preview_limit"); then
     :
   else
     preview="<body preview unavailable>"
   fi
 
-  if [ "$label" = "h. Zallet direct getinfo (no auth)" ]; then
+  if [[ "$label" == *"Zallet direct getinfo (no auth)"* ]]; then
     case "$http_status:$curl_exit" in
       401:*) interpretation="; interpretation=HTTP layer alive (authentication required)" ;;
       000:28) interpretation="; interpretation=timeout; endpoint not answering" ;;
@@ -307,7 +354,7 @@ run_probe() {
 }
 
 run_wallet_path_probes() {
-  local mapping_output mapping_exit mapping_line host_port
+  local mapping_output mapping_exit mapping_line safe_mapping_line host_port
   local wrong_password="zcanary-diagnostic-invalid-password"
   while [ "$wrong_password" = "$ZCANARY_ZALLET_PASSWORD" ] || [ "$wrong_password" = "$ROUTER_PASSWORD" ]; do
     wrong_password="${wrong_password}x"
@@ -323,6 +370,7 @@ run_wallet_path_probes() {
     "docker compose --env-file .env.regtest ps" \
     "$Z3_DIR" \
     timeout --kill-after=1s 10s docker compose --env-file .env.regtest ps
+  capture_host_diagnostics
 
   if mapping_output=$(cd "$Z3_DIR" && timeout --kill-after=1s 10s \
     docker compose --env-file .env.regtest port zallet 28232 2>/dev/null); then
@@ -336,46 +384,49 @@ run_wallet_path_probes() {
   if [[ ! "$host_port" =~ ^[0-9]+$ ]]; then
     host_port=${Z3_ZALLET_HOST_RPC_PORT:-50232}
   fi
+  safe_mapping_line=$(printf '%s\n' "${mapping_line:-unavailable}" | redact_sensitive_diagnostic)
   printf 'docker compose --env-file .env.regtest port zallet 28232: %s (exit %s)\n' \
-    "${mapping_line:-unavailable}" "$mapping_exit" | tee -a "$DIAGNOSTICS_FILE"
+    "$safe_mapping_line" "$mapping_exit" | tee -a "$DIAGNOSTICS_FILE"
 
   run_probe "a. Zebra direct" "http://127.0.0.1:29232" POST getblockchaininfo basic \
     "$NODE_USER" "$ZCANARY_NODE_PASSWORD"
   run_probe "b. Router health" "http://127.0.0.1:8181/health" GET "" none
   run_probe "c. Router -> Zebra" "http://127.0.0.1:8181" POST getblockchaininfo basic \
     "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "d. Router -> Zallet" "http://127.0.0.1:8181" POST z_listaccounts basic \
-    "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "e. Zallet direct z_listaccounts (wallet credentials)" "http://127.0.0.1:$host_port" \
-    POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "f. Zallet direct (router credentials)" "http://127.0.0.1:$host_port" \
-    POST z_listaccounts basic "$ROUTER_USER" "$ROUTER_PASSWORD"
-  run_probe "g. Router -> Zallet (no client auth; one upstream Authorization)" \
-    "http://127.0.0.1:8181" POST z_listaccounts none
-  run_probe "h. Zallet direct getinfo (no auth)" "http://127.0.0.1:$host_port" \
-    POST getinfo none
-  run_probe "i. Zallet direct getinfo (Basic auth)" "http://127.0.0.1:$host_port" \
-    POST getinfo basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "j. Zallet direct getwalletinfo (wallet credentials)" "http://127.0.0.1:$host_port" \
-    POST getwalletinfo basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "k. Zallet direct help (wallet credentials)" "http://127.0.0.1:$host_port" \
-    POST help basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "l. Zallet direct rpc.discover (wallet credentials)" "http://127.0.0.1:$host_port" \
-    POST rpc.discover basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "m. Zallet direct getwalletinfo (wrong password; expect fast 401)" "http://127.0.0.1:$host_port" \
-    POST getwalletinfo basic "$WALLET_USER" "$wrong_password"
-  run_probe "n. Zallet direct getwalletinfo (zebra:zebra credentials)" "http://127.0.0.1:$host_port" \
-    POST getwalletinfo basic zebra zebra
 
-  capture_zallet_method_names "$host_port"
-  run_probe "o. Zallet direct listaddresses (wallet credentials)" "http://127.0.0.1:$host_port" \
-    POST listaddresses basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "p. Zallet direct getwalletstatus (wallet credentials)" "http://127.0.0.1:$host_port" \
-    POST getwalletstatus basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "q. Zallet direct z_getnewaccount (probe account)" "http://127.0.0.1:$host_port" \
-    POST z_getnewaccount basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 10 '["probe"]'
-  run_probe "r. Zallet direct z_listaccounts (60-second timeout)" "http://127.0.0.1:$host_port" \
-    POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 60
+  local help_response
+  help_response=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-help.XXXXXX")
+  PROBE_TEMP_FILES+=("$help_response")
+  run_probe "d. Zallet direct getwalletinfo (10-second timeout)" "http://127.0.0.1:$host_port" \
+    POST getwalletinfo basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 10 '[]' 400
+  run_probe "e. Zallet direct z_listaccounts (empty wallet; 10-second timeout)" "http://127.0.0.1:$host_port" \
+    POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 10 '[]' 400
+  run_probe "f. Zallet direct z_getnewaccount (diag account; 60-second timeout)" "http://127.0.0.1:$host_port" \
+    POST z_getnewaccount basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 60 '["diag"]' 400
+  run_probe "g. Zallet direct z_listaccounts (after account creation; 60-second timeout)" "http://127.0.0.1:$host_port" \
+    POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 60 '[]' 400
+  run_probe "h. Zallet direct listaddresses (30-second timeout)" "http://127.0.0.1:$host_port" \
+    POST listaddresses basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 30 '[]' 400
+  run_probe "i. Zallet direct getwalletstatus (30-second timeout)" "http://127.0.0.1:$host_port" \
+    POST getwalletstatus basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 30 '[]' 400
+  run_probe "j. Zallet direct help (30-second timeout)" "http://127.0.0.1:$host_port" \
+    POST help basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 30 '[]' 400 "$help_response"
+  capture_zallet_method_names "$host_port" "$help_response"
+
+  run_probe "k. Router -> Zallet (wallet credentials; after account creation)" \
+    "http://127.0.0.1:8181" POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
+  run_probe "l. Zallet direct z_listaccounts (router credentials; after account creation)" \
+    "http://127.0.0.1:$host_port" POST z_listaccounts basic "$ROUTER_USER" "$ROUTER_PASSWORD"
+  run_probe "m. Router -> Zallet (no client auth; one upstream Authorization)" \
+    "http://127.0.0.1:8181" POST z_listaccounts none
+  run_probe "n. Zallet direct getinfo (no auth)" "http://127.0.0.1:$host_port" \
+    POST getinfo none
+  run_probe "o. Zallet direct getinfo (Basic auth)" "http://127.0.0.1:$host_port" \
+    POST getinfo basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
+  run_probe "p. Zallet direct getwalletinfo (wrong password; expect fast 401)" \
+    "http://127.0.0.1:$host_port" POST getwalletinfo basic "$WALLET_USER" "$wrong_password"
+  run_probe "q. Zallet direct getwalletinfo (zebra:zebra credentials)" \
+    "http://127.0.0.1:$host_port" POST getwalletinfo basic zebra zebra
 
   printf '==> post-probe runtime snapshots\n' | tee -a "$DIAGNOSTICS_FILE"
   append_redacted_tail \

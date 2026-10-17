@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_diagnostic_script_emits_eighteen_bounded_redacted_probes_and_ports():
+def test_diagnostic_script_emits_ordered_wallet_probes_and_safe_host_snapshots():
     script_path = ROOT / "scripts" / "diagnose-wallet-path.sh"
     assert script_path.is_file()
     script = script_path.read_text(encoding="utf-8")
@@ -22,6 +22,9 @@ def test_diagnostic_script_emits_eighteen_bounded_redacted_probes_and_ports():
     assert "--connect-timeout 5" in script
     assert '--max-time "$max_time"' in script
     assert 'max_time="${8:-10}"' in script
+    assert 'preview_limit="${10:-160}"' in script
+    assert "10|30|60" in script
+    assert "400" in script
     assert "-sS" in script and "-o" in script
     assert "-w '%{http_code} %{time_total}'" in script
     for method in (
@@ -32,14 +35,21 @@ def test_diagnostic_script_emits_eighteen_bounded_redacted_probes_and_ports():
     for endpoint in ("127.0.0.1:29232", "127.0.0.1:8181/health", "127.0.0.1:8181"):
         assert endpoint in script
     assert len(re.findall(r'^\s*run_probe\s+"', script, re.MULTILINE)) == 18
-    assert 'run_probe "m. Zallet direct getwalletinfo (wrong password; expect fast 401)"' in script
-    assert 'run_probe "n. Zallet direct getwalletinfo (zebra:zebra credentials)"' in script
-    assert 'run_probe "o. Zallet direct listaddresses (wallet credentials)"' in script
-    assert 'run_probe "p. Zallet direct getwalletstatus (wallet credentials)"' in script
-    assert 'run_probe "q. Zallet direct z_getnewaccount (probe account)"' in script
-    assert 'run_probe "r. Zallet direct z_listaccounts (60-second timeout)"' in script
-    assert 'POST z_getnewaccount basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 10 ' in script
-    assert "'[\"probe\"]'" in script
+
+    ordered_labels = (
+        'run_probe "d. Zallet direct getwalletinfo (10-second timeout)"',
+        'run_probe "e. Zallet direct z_listaccounts (empty wallet; 10-second timeout)"',
+        'run_probe "f. Zallet direct z_getnewaccount (diag account; 60-second timeout)"',
+        'run_probe "g. Zallet direct z_listaccounts (after account creation; 60-second timeout)"',
+        'run_probe "h. Zallet direct listaddresses (30-second timeout)"',
+        'run_probe "i. Zallet direct getwalletstatus (30-second timeout)"',
+        'run_probe "j. Zallet direct help (30-second timeout)"',
+    )
+    assert all(label in script for label in ordered_labels)
+    positions = [script.index(label) for label in ordered_labels]
+    assert positions == sorted(positions)
+    assert 'POST z_getnewaccount basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 60 ' in script
+    assert '["diag"]' in script
     assert 'POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 60' in script
     assert 'local wrong_password="zcanary-diagnostic-invalid-password"' in script
     assert 'export ZCANARY_DIAGNOSTIC_WRONG_PASSWORD="$wrong_password"' in script
@@ -50,16 +60,19 @@ def test_diagnostic_script_emits_eighteen_bounded_redacted_probes_and_ports():
     assert "contains_whitespace" in script and "contains_non_hex" in script
     assert "capture_zallet_method_names" in script
     assert "command -v jq" in script and "python3 -" in script
-    assert "$ROOT/out/diagnostics/zallet-methods.txt" in script
     assert "Zallet methods: count=%s; z_listaccounts=%s; z_getnewaccount=%s; listaddresses=%s" in script
+    assert "docker version" in script
+    assert "docker info (first 40 lines)" in script
+    assert "uname -a" in script
+    assert "df -h /var/lib/docker" in script
+    assert "docker volume inspect --format '{{.Name}} {{.Driver}}' z3-regtest-zallet" in script
+    assert "append_redacted_head" in script
     assert "docker compose --env-file .env.regtest top zallet" in script
     assert "docker stats --no-stream" in script
     assert "docker compose --env-file .env.regtest logs --no-color --tail 200 zallet" in script
     assert 'tail -n "$line_count"' in script and '"$Z3_DIR" 200' in script
     assert "docker compose --env-file .env.regtest exec -T zallet ls -la /var/lib/zallet" in script
     assert "cat /var/lib/zallet" not in script
-    assert "redact_diagnostic" in script
-    assert "160" in script
 
 
 def test_basic_auth_uses_private_temp_config_not_process_substitution():
@@ -160,6 +173,9 @@ def test_diagnostic_probes_use_actual_port_continue_after_timeout_and_redact_bod
     trace = tmp_path / "curl-trace.jsonl"
     output = tmp_path / "wallet-startup.log"
     methods_output = tmp_path / "zallet-methods.txt"
+    account_created = tmp_path / "account-created"
+    docker_trace = tmp_path / "docker-trace.jsonl"
+    host_trace = tmp_path / "host-trace.jsonl"
     full_address = "uregtest1abcdefghijklmnopqrstuvwxyz0123456789"
     node_password = "node-probe-password-not-a-secret"
     wallet_password = "Q7z! t9L#"
@@ -211,7 +227,8 @@ with open(os.environ["CURL_TRACE"], "a", encoding="utf-8") as trace:
 body = (
     os.environ["FULL_ADDRESS"] + " " + os.environ["ZCANARY_NODE_PASSWORD"] + " "
     + os.environ["ZCANARY_ZALLET_PASSWORD"] + " "
-    + os.environ["Z3_REGTEST_RPC_ROUTER_PASSWORD"] + " probe body"
+    + os.environ["Z3_REGTEST_RPC_ROUTER_PASSWORD"]
+    + " abcdef1234567890 BODY-BEGIN " + "Z" * 500
 )
 if method == "help":
     output.write_text(json.dumps({"result": "getwalletinfo\\nz_listaccounts\\nz_getnewaccount\\nlistaddresses\\n"}), encoding="utf-8")
@@ -222,6 +239,15 @@ elif method == "rpc.discover":
     ]}}), encoding="utf-8")
 else:
     output.write_text(body, encoding="utf-8")
+if method == "z_getnewaccount" and params == ["diag"]:
+    Path(os.environ["ACCOUNT_CREATED_FILE"]).write_text("created", encoding="utf-8")
+if method == "help" and os.environ.get("FAKE_HELP_HANG") == "1":
+    print("000 30.000", end="")
+    sys.exit(28)
+if url == "http://127.0.0.1:55032" and method == "z_listaccounts":
+    if not Path(os.environ["ACCOUNT_CREATED_FILE"]).exists():
+        print("000 10.000", end="")
+        sys.exit(28)
 if url == "http://127.0.0.1:8181" and method == "z_listaccounts" and record["auth"]:
     print("000 10.000", end="")
     sys.exit(28)
@@ -240,9 +266,34 @@ sys.exit(0)
     fake_docker = fake_bin / "docker"
     fake_docker.write_text(
         """#!/usr/bin/env python3
-import os, sys
+import json, os, sys
 args = sys.argv[1:]
-if args[-3:] == ["port", "zallet", "28232"]:
+with open(os.environ["DOCKER_TRACE"], "a", encoding="utf-8") as trace:
+    trace.write(json.dumps(args) + "\\n")
+if args == ["version"]:
+    print("Client:")
+    print(" Version: 27.5.1")
+    print(" Git commit: a1b2c3d4e5f60718")
+    print("Server:")
+    print(" Version: 28.0.4")
+    print(" Git commit: 0f1e2d3c4b5a6978")
+    print(" Cookie: DOCKER_VERSION_COOKIE_SENTINEL")
+elif args == ["info"]:
+    for index in range(1, 46):
+        if index == 2:
+            print(f"info-line-{index} ID: 0123456789abcdef0123456789abcdef")
+        elif index == 3:
+            print(f"info-line-{index} Cookie: DOCKER_INFO_COOKIE_SENTINEL")
+        elif index == 4:
+            print(f"info-line-{index} HTTP Proxy: http://docker-user:DOCKER_PROXY_PASSWORD_SENTINEL@proxy.example:8080")
+        else:
+            print(f"info-line-{index}")
+elif args[:2] == ["volume", "inspect"]:
+    if args == ["volume", "inspect", "--format", "{{.Name}} {{.Driver}}", "z3-regtest-zallet"]:
+        print("z3-regtest-zallet local")
+    else:
+        print("raw-volume-metadata DOCKER_VOLUME_COOKIE_SENTINEL abcdef1234567890")
+elif args[-3:] == ["port", "zallet", "28232"]:
     print("0.0.0.0:55032")
 elif args[-1:] == ["ps"]:
     print("NAME SERVICE STATUS PORTS")
@@ -262,11 +313,38 @@ else:
         encoding="utf-8",
     )
     fake_docker.chmod(0o755)
+    fake_uname = fake_bin / "uname"
+    fake_uname.write_text(
+        """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["HOST_TRACE"], "a", encoding="utf-8") as trace:
+    trace.write(json.dumps({"command": "uname", "args": sys.argv[1:]}) + "\\n")
+print("Linux zcanary-test 6.8.0 #1 SMP x86_64 GNU/Linux")
+""",
+        encoding="utf-8",
+    )
+    fake_uname.chmod(0o755)
+    fake_df = fake_bin / "df"
+    fake_df.write_text(
+        """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["HOST_TRACE"], "a", encoding="utf-8") as trace:
+    trace.write(json.dumps({"command": "df", "args": sys.argv[1:]}) + "\\n")
+print("Filesystem Size Used Avail Use% Mounted on")
+print("/dev/sda1 20G 8G 12G 40% /var/lib/docker")
+""",
+        encoding="utf-8",
+    )
+    fake_df.chmod(0o755)
     env = os.environ.copy()
     env.update(
         {
             "PATH": f"{fake_bin}:{env['PATH']}",
             "CURL_TRACE": str(trace),
+            "DOCKER_TRACE": str(docker_trace),
+            "HOST_TRACE": str(host_trace),
+            "ACCOUNT_CREATED_FILE": str(account_created),
+            "FAKE_HELP_HANG": "1",
             "FULL_ADDRESS": full_address,
             "ZCANARY_DIAGNOSTICS_FILE": str(output),
             "ZCANARY_ZALLET_METHODS_FILE": str(methods_output),
@@ -292,65 +370,104 @@ else:
     assert proc.returncode == 0, proc.stderr
     records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
     host_url = "http://127.0.0.1:55032"
-    assert len(records) == 20
+    assert len(records) == 18
     assert [record["url"] for record in records] == [
         "http://127.0.0.1:29232",
         "http://127.0.0.1:8181/health",
         "http://127.0.0.1:8181",
+        host_url,
+        host_url,
+        host_url,
+        host_url,
+        host_url,
+        host_url,
+        host_url,
+        host_url,
         "http://127.0.0.1:8181",
         host_url,
-        host_url,
         "http://127.0.0.1:8181",
-        host_url,
-        host_url,
-        host_url,
-        host_url,
-        host_url,
-        host_url,
-        host_url,
-        host_url,
-        host_url,
         host_url,
         host_url,
         host_url,
         host_url,
     ]
     assert [record["method"] for record in records] == [
-        "getblockchaininfo", "GET", "getblockchaininfo", "z_listaccounts",
-        "z_listaccounts", "z_listaccounts", "z_listaccounts", "getinfo", "getinfo",
-        "getwalletinfo", "help", "rpc.discover", "getwalletinfo", "getwalletinfo",
-        "help", "rpc.discover", "listaddresses", "getwalletstatus", "z_getnewaccount",
-        "z_listaccounts",
+        "getblockchaininfo", "GET", "getblockchaininfo", "getwalletinfo",
+        "z_listaccounts", "z_getnewaccount", "z_listaccounts", "listaddresses",
+        "getwalletstatus", "help", "rpc.discover", "z_listaccounts",
+        "z_listaccounts", "z_listaccounts", "getinfo", "getinfo",
+        "getwalletinfo", "getwalletinfo",
     ]
     assert [record["auth"] for record in records] == [
-        True, False, True, True, True, True, False, False, True, True,
-        True, True, True, True, True, True, True, True, True, True,
+        True, False, True, True, True, True, True, True, True, True,
+        True, True, True, False, False, True, True, True,
     ]
-    assert records[18]["params"] == ["probe"]
-    assert records[19]["params"] == []
-    assert [record["max_time"] for record in records] == ["10"] * 19 + ["60"]
+    assert records[4]["params"] == []
+    assert records[5]["params"] == ["diag"]
+    assert records[6]["params"] == []
+    assert [record["max_time"] for record in records] == [
+        "10", "10", "10", "10", "10", "60", "60", "30", "30", "30",
+        "30", "10", "10", "10", "10", "10", "10", "10",
+    ]
     for record in records:
         assert record["connect_timeout"] == "5"
-        assert record["max_time"] in {"10", "60"}
+        assert record["max_time"] in {"10", "30", "60"}
         assert record["write_out"] == "%{http_code} %{time_total}"
         assert record["disable"] and record["silent_show_error"]
     assert all(record["config_mode"] == "0o600" for record in records if record["auth"])
     assert all(record["config_mode"] is None for record in records if not record["auth"])
-    assert not records[6]["authorization_header"]
+    assert not records[13]["authorization_header"]
 
     rendered = proc.stdout + proc.stderr + output.read_text(encoding="utf-8")
-    for secret in (node_password, wallet_password, router_password, full_address, "zcanary-diagnostic-invalid-password"):
+    for secret in (
+        node_password, wallet_password, router_password, full_address,
+        "zcanary-diagnostic-invalid-password", "a1b2c3d4e5f60718",
+        "0f1e2d3c4b5a6978", "0123456789abcdef0123456789abcdef",
+        "DOCKER_VERSION_COOKIE_SENTINEL", "DOCKER_INFO_COOKIE_SENTINEL",
+        "DOCKER_VOLUME_COOKIE_SENTINEL", "DOCKER_PROXY_PASSWORD_SENTINEL", "abcdef1234567890",
+    ):
         assert secret not in rendered
     method_names = methods_output.read_text(encoding="utf-8").splitlines()
     assert method_names == ["getwalletinfo", "listaddresses", "z_getnewaccount", "z_listaccounts"]
     assert all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]*", method) for method in method_names)
     assert "Zallet methods: count=4; z_listaccounts=yes; z_getnewaccount=yes; listaddresses=yes" in rendered
-    assert "method-name help: HTTP status=200; curl exit=0; seconds=0.012" in rendered
+    assert "Zallet direct getwalletinfo (10-second timeout): HTTP status=200; curl exit=0" in rendered
+    assert re.search(r"empty wallet; 10-second timeout.*HTTP status=000; curl exit=28; seconds=10\.000", rendered)
+    assert re.search(r"diag account; 60-second timeout.*HTTP status=200; curl exit=0", rendered)
+    assert re.search(r"after account creation; 60-second timeout.*HTTP status=200; curl exit=0", rendered)
+    assert re.search(r"listaddresses \(30-second timeout\).*HTTP status=200; curl exit=0", rendered)
+    assert re.search(r"getwalletstatus \(30-second timeout\).*HTTP status=200; curl exit=0", rendered)
+    assert re.search(r"help \(30-second timeout\).*HTTP status=000; curl exit=28; seconds=30\.000", rendered)
     assert "method-name rpc.discover: HTTP status=200; curl exit=0; seconds=0.012" in rendered
+    ordered_probe_prefixes = (
+        "d. Zallet direct getwalletinfo",
+        "e. Zallet direct z_listaccounts (empty wallet",
+        "f. Zallet direct z_getnewaccount",
+        "g. Zallet direct z_listaccounts (after account creation",
+        "h. Zallet direct listaddresses",
+        "i. Zallet direct getwalletstatus",
+        "j. Zallet direct help",
+    )
+    ordered_previews = []
+    for prefix in ordered_probe_prefixes:
+        line = next(line for line in rendered.splitlines() if line.startswith(prefix))
+        preview_match = re.search(r'body="(.*)"', line)
+        assert preview_match is not None
+        ordered_previews.append(preview_match.group(1))
+    assert all(len(preview) <= 400 for preview in ordered_previews)
+    assert len(ordered_previews[4]) == 400
+    assert "BODY-BEGIN" in ordered_previews[4] and "<redacted-hash>" in ordered_previews[4]
+    assert "<redacted>" in ordered_previews[4]
     assert "total 0" in rendered
-    assert wallet_password[:8] not in rendered and wallet_password[-8:] not in rendered
     assert "Zallet password sanity: length=9; contains_whitespace=yes; contains_non_hex=yes" in rendered
     assert "docker compose --env-file .env.regtest ps" in rendered
+    assert "docker version" in rendered
+    assert "docker info (first 40 lines)" in rendered
+    assert "info-line-40" in rendered and "info-line-41" not in rendered
+    assert "uname -a" in rendered and "Linux zcanary-test" in rendered
+    assert "df -h /var/lib/docker" in rendered and "/var/lib/docker" in rendered
+    assert "z3-regtest-zallet local" in rendered
+    assert "raw-volume-metadata" not in rendered
     assert "docker compose --env-file .env.regtest top zallet" in rendered
     assert "docker stats --no-stream" in rendered
     assert "docker compose --env-file .env.regtest logs --no-color --tail 200 zallet" in rendered
@@ -365,18 +482,16 @@ else:
     assert re.search(r"Zallet direct getinfo \(Basic auth\).*HTTP status=200.*curl exit=0", rendered)
     assert re.search(r"wrong password; expect fast 401.*HTTP status=401.*curl exit=0", rendered)
     assert re.search(r"zebra:zebra credentials.*HTTP status=401.*curl exit=0", rendered)
-    for label in (
-        "j. Zallet direct getwalletinfo (wallet credentials)",
-        "k. Zallet direct help (wallet credentials)",
-        "l. Zallet direct rpc.discover (wallet credentials)",
-        "o. Zallet direct listaddresses (wallet credentials)",
-        "p. Zallet direct getwalletstatus (wallet credentials)",
-        "q. Zallet direct z_getnewaccount (probe account)",
-        "r. Zallet direct z_listaccounts (60-second timeout)",
-    ):
-        assert re.search(rf"{re.escape(label)}.*HTTP status=200.*seconds=0[.]012", rendered)
-    assert "exec -T zallet ls -la /var/lib/zallet" in rendered
-    assert "uregtest1abc…456789" in rendered
+    docker_calls = [json.loads(line) for line in docker_trace.read_text(encoding="utf-8").splitlines()]
+    assert docker_calls.count(["version"]) == 1
+    assert docker_calls.count(["info"]) == 1
+    assert docker_calls.count(["volume", "inspect", "--format", "{{.Name}} {{.Driver}}", "z3-regtest-zallet"]) == 1
+    assert docker_calls.count(["compose", "--env-file", ".env.regtest", "exec", "-T", "zallet", "ls", "-la", "/var/lib/zallet"]) == 1
+    host_calls = [json.loads(line) for line in host_trace.read_text(encoding="utf-8").splitlines()]
+    assert host_calls == [
+        {"command": "uname", "args": ["-a"]},
+        {"command": "df", "args": ["-h", "/var/lib/docker"]},
+    ]
 
 
 def test_method_name_parser_falls_back_to_safe_python_when_jq_fails(tmp_path):
@@ -436,10 +551,7 @@ def test_method_name_parser_falls_back_to_safe_python_when_jq_fails(tmp_path):
 
 def test_spike_runs_path_probes_at_90_seconds_and_again_on_timeout():
     script = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
-    assert script.count('bash "$ROOT/scripts/diagnose-wallet-path.sh"') == 1
     assert 'WAIT_ELAPSED" -ge 90' in script
-    assert 'run_wallet_path_diagnostics "$WAIT_ELAPSED" "continued-failure-90s"' in script
-    assert 'run_wallet_path_diagnostics "$WAIT_ELAPSED" "wait-timeout"' in script
     first_failure_match = re.search(
         r'if \[ "\$FIRST_READINESS_FAILURE_CAPTURED" -eq 0 \]; then(.*?)\n  fi\n  WAIT_ELAPSED=',
         script,
@@ -484,7 +596,6 @@ def test_diagnose_workflow_is_manual_bounded_matrix_and_always_uploads_diagnosti
     assert "ZCANARY_DIAG_PREPARE_STARTED_EPOCH" in workflow
     probe_step = workflow.split("name: Run wallet path probes after prepare", 1)[1].split("      - name:", 1)[0]
     assert "if: always()" in probe_step
-    assert "bash scripts/diagnose-wallet-path.sh" in probe_step
     assert "wallet path probes complete" not in probe_step
     assert "post-prepare" in probe_step
     assert "secrets.ZCANARY_ZEBRA_PASSWORD" in workflow
