@@ -14,7 +14,12 @@ case "$Z3_DIR" in
   /*) ;;
   *) Z3_DIR="$ROOT/$Z3_DIR" ;;
 esac
-mkdir -p "$(dirname "$DIAGNOSTICS_FILE")"
+ZALLET_METHODS_FILE=${ZCANARY_ZALLET_METHODS_FILE:-$ROOT/out/diagnostics/zallet-methods.txt}
+case "$ZALLET_METHODS_FILE" in
+  /*) ;;
+  *) ZALLET_METHODS_FILE="$ROOT/$ZALLET_METHODS_FILE" ;;
+esac
+mkdir -p "$(dirname "$DIAGNOSTICS_FILE")" "$(dirname "$ZALLET_METHODS_FILE")"
 
 : "${ZCANARY_NODE_PASSWORD:?set ZCANARY_NODE_PASSWORD in the environment}"
 : "${ZCANARY_ZALLET_PASSWORD:?set ZCANARY_ZALLET_PASSWORD in the environment}"
@@ -91,20 +96,172 @@ append_redacted_lines() {
   return 0
 }
 
+extract_method_names() {
+  local response_file="$1" jq_result
+  if command -v jq >/dev/null 2>&1; then
+    if jq_result=$(jq -r '
+      def rpc_names:
+        if type == "object" then
+          if (.methods? | type) == "array" then
+            .methods[] | rpc_names
+          elif ((.name? // .method? // .command?) | type) == "string" then
+            (.name // .method // .command)
+          elif has("result") then
+            .result | rpc_names
+          else
+            empty
+          end
+        elif type == "array" then
+          .[] | rpc_names
+        elif type == "string" then
+          split("\n")[]
+          | select((test("^\\s*==") | not))
+          | (try capture("^\\s*(?<method>[A-Za-z][A-Za-z0-9_.]*)") catch empty)
+          | .method
+        else
+          empty
+        end;
+      rpc_names
+      | select(type == "string" and test("^[A-Za-z][A-Za-z0-9_.]*$"))
+    ' "$response_file" 2>/dev/null) && [ -n "$jq_result" ]; then
+      printf '%s\n' "$jq_result"
+      return 0
+    fi
+  fi
+
+  python3 - "$response_file" <<'PYTHON'
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+    document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(0)
+
+valid_name = re.compile(r"[A-Za-z][A-Za-z0-9_.]*\Z")
+line_name = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_.]*)")
+
+def names(value):
+    if isinstance(value, dict):
+        methods = value.get("methods")
+        if isinstance(methods, list):
+            for method in methods:
+                yield from names(method)
+        else:
+            for key in ("name", "method", "command"):
+                candidate = value.get(key)
+                if isinstance(candidate, str):
+                    yield candidate
+                    return
+            if "result" in value:
+                yield from names(value["result"])
+    elif isinstance(value, list):
+        for item in value:
+            yield from names(item)
+    elif isinstance(value, str):
+        for line in value.splitlines():
+            if line.lstrip().startswith("=="):
+                continue
+            match = line_name.match(line)
+            if match:
+                yield match.group(1)
+
+for name in names(document):
+    if valid_name.fullmatch(name):
+        print(name)
+PYTHON
+}
+
+capture_zallet_rpc_document() {
+  local label="$1" method="$2" host_port="$3" body_file="$4"
+  local metadata_file curl_error_file config_file json_body
+  local curl_exit=0 http_status=000 elapsed=unknown escaped_user escaped_password
+  local -a curl_command
+
+  metadata_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-meta.XXXXXX")
+  curl_error_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-error.XXXXXX")
+  config_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-config.XXXXXX")
+  PROBE_TEMP_FILES+=("$metadata_file" "$curl_error_file" "$config_file")
+  chmod 600 "$config_file"
+  escaped_user=$(escape_curl_config "$WALLET_USER")
+  escaped_password=$(escape_curl_config "$ZCANARY_ZALLET_PASSWORD")
+  printf 'user = "%s:%s"\n' "$escaped_user" "$escaped_password" > "$config_file"
+  json_body=$(printf '{"jsonrpc":"2.0","id":1,"method":"%s","params":[]}' "$method")
+  curl_command=(curl --disable --connect-timeout 5 --max-time 10 -sS \
+    -o "$body_file" -w '%{http_code} %{time_total}' --config "$config_file" \
+    -X POST -H 'Content-Type: application/json' -d "$json_body" \
+    "http://127.0.0.1:$host_port")
+
+  if "${curl_command[@]}" > "$metadata_file" 2> "$curl_error_file"; then
+    curl_exit=0
+  else
+    curl_exit=$?
+  fi
+  if read -r http_status elapsed < "$metadata_file"; then
+    :
+  fi
+  [[ "$http_status" =~ ^[0-9]{3}$ ]] || http_status=000
+  [[ "$elapsed" =~ ^[0-9]+([.][0-9]+)?$ ]] || elapsed=unknown
+  printf '%s: HTTP status=%s; curl exit=%s; seconds=%s\n' \
+    "$label" "$http_status" "$curl_exit" "$elapsed" \
+    | tee -a "$DIAGNOSTICS_FILE"
+}
+
+capture_zallet_method_names() {
+  local host_port="$1" help_file discover_file help_names discover_names selected_names sorted_file
+  local count has_z_listaccounts=no has_z_getnewaccount=no has_listaddresses=no
+
+  help_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-help.XXXXXX")
+  discover_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-discover.XXXXXX")
+  help_names=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-help-names.XXXXXX")
+  discover_names=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-method-discover-names.XXXXXX")
+  selected_names=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-methods.XXXXXX")
+  sorted_file=$(mktemp "$(dirname "$ZALLET_METHODS_FILE")/.zallet-methods.XXXXXX")
+  PROBE_TEMP_FILES+=("$help_file" "$discover_file" "$help_names" "$discover_names" "$selected_names" "$sorted_file")
+
+  capture_zallet_rpc_document "method-name help" help "$host_port" "$help_file"
+  capture_zallet_rpc_document "method-name rpc.discover" rpc.discover "$host_port" "$discover_file"
+  extract_method_names "$discover_file" > "$discover_names" || true
+  extract_method_names "$help_file" > "$help_names" || true
+  if [ -s "$discover_names" ]; then
+    cat "$discover_names" > "$selected_names"
+  else
+    cat "$help_names" > "$selected_names"
+  fi
+  LC_ALL=C sort -u "$selected_names" -o "$sorted_file"
+  mv -f "$sorted_file" "$ZALLET_METHODS_FILE"
+
+  count=$(wc -l < "$ZALLET_METHODS_FILE")
+  count=${count//[[:space:]]/}
+  if grep -Fqx -- z_listaccounts "$ZALLET_METHODS_FILE"; then has_z_listaccounts=yes; fi
+  if grep -Fqx -- z_getnewaccount "$ZALLET_METHODS_FILE"; then has_z_getnewaccount=yes; fi
+  if grep -Fqx -- listaddresses "$ZALLET_METHODS_FILE"; then has_listaddresses=yes; fi
+  printf 'Zallet methods: count=%s; z_listaccounts=%s; z_getnewaccount=%s; listaddresses=%s\n' \
+    "$count" "$has_z_listaccounts" "$has_z_getnewaccount" "$has_listaddresses" \
+    | tee -a "$DIAGNOSTICS_FILE"
+}
+
 run_probe() {
   local label="$1" url="$2" verb="$3" rpc_method="$4" auth_mode="$5"
   local auth_user="${6:-}" auth_password="${7:-}"
+  local max_time="${8:-10}" params_json="${9:-[]}"
   local body_file metadata_file curl_error_file config_file="" json_body=""
   local curl_exit=0 http_status=000 elapsed=unknown preview="" interpretation=""
   local escaped_user escaped_password
   local -a curl_command
 
+  case "$max_time" in
+    10|60) ;;
+    *) max_time=10 ;;
+  esac
   body_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-body.XXXXXX")
   metadata_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-meta.XXXXXX")
   curl_error_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-wallet-probe-error.XXXXXX")
   PROBE_TEMP_FILES+=("$body_file" "$metadata_file" "$curl_error_file")
 
-  curl_command=(curl --disable --connect-timeout 5 --max-time 10 -sS \
+  curl_command=(curl --disable --connect-timeout 5 --max-time "$max_time" -sS \
     -o "$body_file" -w '%{http_code} %{time_total}')
   if [ "$auth_mode" = basic ]; then
     escaped_user=$(escape_curl_config "$auth_user")
@@ -116,7 +273,7 @@ run_probe() {
     curl_command+=(--config "$config_file")
   fi
   if [ "$verb" = POST ]; then
-    json_body=$(printf '{"jsonrpc":"2.0","id":1,"method":"%s","params":[]}' "$rpc_method")
+    json_body=$(printf '{"jsonrpc":"2.0","id":1,"method":"%s","params":%s}' "$rpc_method" "$params_json")
     curl_command+=(-X POST -H 'Content-Type: application/json' -d "$json_body")
   fi
   curl_command+=("$url")
@@ -210,6 +367,16 @@ run_wallet_path_probes() {
   run_probe "n. Zallet direct getwalletinfo (zebra:zebra credentials)" "http://127.0.0.1:$host_port" \
     POST getwalletinfo basic zebra zebra
 
+  capture_zallet_method_names "$host_port"
+  run_probe "o. Zallet direct listaddresses (wallet credentials)" "http://127.0.0.1:$host_port" \
+    POST listaddresses basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
+  run_probe "p. Zallet direct getwalletstatus (wallet credentials)" "http://127.0.0.1:$host_port" \
+    POST getwalletstatus basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
+  run_probe "q. Zallet direct z_getnewaccount (probe account)" "http://127.0.0.1:$host_port" \
+    POST z_getnewaccount basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 10 '["probe"]'
+  run_probe "r. Zallet direct z_listaccounts (60-second timeout)" "http://127.0.0.1:$host_port" \
+    POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 60
+
   printf '==> post-probe runtime snapshots\n' | tee -a "$DIAGNOSTICS_FILE"
   append_redacted_tail \
     "$DIAGNOSTICS_FILE" \
@@ -226,6 +393,11 @@ run_wallet_path_probes() {
     "docker compose --env-file .env.regtest logs --no-color --tail 200 zallet" \
     "$Z3_DIR" 200 \
     timeout --kill-after=1s 10s docker compose --env-file .env.regtest logs --no-color --tail 200 zallet
+  append_redacted_tail \
+    "$DIAGNOSTICS_FILE" \
+    "docker compose --env-file .env.regtest exec -T zallet ls -la /var/lib/zallet" \
+    "$Z3_DIR" \
+    timeout --kill-after=1s 10s docker compose --env-file .env.regtest exec -T zallet ls -la /var/lib/zallet
 
   printf '==> wallet path probes complete batch=%s elapsed=%ss\n' \
     "$DIAGNOSTIC_BATCH" "$DIAGNOSTIC_ELAPSED_S" | tee -a "$DIAGNOSTICS_FILE"
