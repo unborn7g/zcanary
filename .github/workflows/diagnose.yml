@@ -19,17 +19,26 @@ jobs:
             zallet_version: 0.1.0-beta.1
             zallet_image: zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d
             physical_cpu_workaround: "off"
+            deep_stacks: "1"
             artifact_name: zcanary-wallet-path-diagnostics-beta1
           - zallet_name: beta1-cpufix
             zallet_version: 0.1.0-beta.1
             zallet_image: zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d
             physical_cpu_workaround: "on"
+            deep_stacks: "1"
             artifact_name: zcanary-wallet-path-diagnostics-beta1-cpufix
           - zallet_name: beta3-cpufix
             zallet_version: 0.1.0-beta.3
             zallet_image: zodlinc/zallet:v0.1.0-beta.3@sha256:54d1a774317371b1e88c8a54712cdfa4aa7d8f20ae2a0205f9a190e502aef0f6
             physical_cpu_workaround: "on"
+            deep_stacks: "0"
             artifact_name: zcanary-wallet-path-diagnostics-beta3-cpufix
+          - zallet_name: beta2
+            zallet_version: 0.1.0-beta.2
+            zallet_image: zodlinc/zallet:v0.1.0-beta.2
+            physical_cpu_workaround: "off"
+            deep_stacks: "0"
+            artifact_name: zcanary-wallet-path-diagnostics-beta2
     env:
       # Reuse the two private-regtest password secrets from the integration job.
       ZCANARY_ZEBRA_PASSWORD: ${{ secrets.ZCANARY_ZEBRA_PASSWORD }}
@@ -43,6 +52,7 @@ jobs:
       Z3_ZALLET_IMAGE: ${{ matrix.zallet_image }}
       ZCANARY_ZALLET_VERSION: ${{ matrix.zallet_version }}
       ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND: ${{ matrix.physical_cpu_workaround }}
+      ZCANARY_DEEP_STACKS: ${{ matrix.deep_stacks }}
       Z3_ZALLET_RUST_LOG: debug
       ZCANARY_ROUTER_LOG_INFO: "1"
       # Keep this manual diagnostic run short; the normal CI wait remains six minutes.
@@ -57,11 +67,37 @@ jobs:
         run: python -m pip install -e '.[dev]'
       - name: Verify Docker availability
         run: docker compose version && docker info
+      - name: Best-effort beta2 Zallet image pull
+        if: ${{ matrix.zallet_name == 'beta2' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p out/diagnostics
+          source scripts/lib/diagnostics.sh
+          pull_log=$(mktemp /tmp/zcanary-beta2-pull.XXXXXX)
+          if timeout --kill-after=5s 120s docker pull "$Z3_ZALLET_IMAGE" >"$pull_log" 2>&1; then
+            pull_status=0
+          else
+            pull_status=$?
+          fi
+          {
+            printf 'Beta2 Zallet image pre-pull: image=%s; exit=%s\n' "$Z3_ZALLET_IMAGE" "$pull_status"
+            redact_diagnostic < "$pull_log" | tail -n 40
+          } | tee out/diagnostics/zallet-image-pull.txt
+          rm -f "$pull_log"
       - name: Prepare disposable Regtest stack
+        id: prepare
+        continue-on-error: ${{ matrix.zallet_name == 'beta2' }}
         shell: bash
         run: |
           echo "ZCANARY_DIAG_PREPARE_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           bash scripts/prepare-regtest.sh
+      - name: Record beta2 prepare outcome
+        if: ${{ always() && matrix.zallet_name == 'beta2' }}
+        shell: bash
+        run: |
+          mkdir -p out/diagnostics
+          printf 'Beta2 Regtest prepare outcome: %s\n' "${{ steps.prepare.outcome }}" | tee -a out/diagnostics/zallet-image-pull.txt
       - name: Run wallet path probes after prepare
         if: always()
         shell: bash

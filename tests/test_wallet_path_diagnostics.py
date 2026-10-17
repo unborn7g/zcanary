@@ -836,6 +836,187 @@ def test_spike_runs_path_probes_at_90_seconds_and_again_on_timeout():
     assert "elapsed=${ZCANARY_DIAGNOSTIC_ELAPSED_S}" in (ROOT / "scripts" / "diagnose-wallet-path.sh").read_text()
 
 
+def test_deep_stack_capture_is_opt_in_bounded_and_redacted():
+    script = (ROOT / "scripts" / "diagnose-wallet-path.sh").read_text(encoding="utf-8")
+    assert 'ZCANARY_DEEP_STACKS=${ZCANARY_DEEP_STACKS:-0}' in script
+    assert 'run_deep_stack_diagnostics "$host_port"' in script
+    assert "sudo apt-get install -y gdb strace" in script
+    assert "docker compose --env-file .env.regtest ps -q zallet" in script
+    assert "docker inspect -f '{{.State.Pid}}'" in script
+    assert ':/usr/local/bin/zallet-zaino' in script
+    assert 'zallet-gdb-threads.txt' in script
+    assert 'zallet-strace.txt' in script
+    assert 'sudo timeout 60 gdb -batch -p "$PID"' in script
+    assert 'set sysroot /proc/$PID/root' in script
+    assert 'thread apply all bt 40' in script
+    assert "bt full" not in script
+    assert "-e trace=openat,futex,fcntl,flock,fsync,fdatasync" in script
+    assert "read,write,pread,pwrite" not in script
+    assert "head -c 300000" in script
+    assert "redact_diagnostic" in script
+    assert "/tmp/zcanary-deep-stacks." in script
+    assert "rm -rf -- \"$DEEP_STACK_TEMP_DIR\"" in script
+    log_snapshot_pos = script.index('"docker compose --env-file .env.regtest logs --no-color --tail 200 zallet"')
+    deep_call_pos = script.index('run_deep_stack_diagnostics "$host_port"')
+    complete_pos = script.index("wallet path probes complete batch=")
+    assert log_snapshot_pos < deep_call_pos < complete_pos
+
+
+def test_deep_stacks_continue_on_failure_cap_outputs_and_remove_binary(tmp_path):
+    script_path = ROOT / "scripts" / "diagnose-wallet-path.sh"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    output_dir = tmp_path / "diagnostics"
+    z3_dir = tmp_path / "z3"
+    z3_dir.mkdir()
+    command_trace = tmp_path / "deep-command-trace.jsonl"
+    curl_trace = tmp_path / "deep-curl-trace.jsonl"
+
+    def write_executable(name: str, content: str) -> None:
+        path = fake_bin / name
+        path.write_text(content, encoding="utf-8")
+        path.chmod(0o755)
+
+    write_executable(
+        "sudo",
+        """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["DEEP_COMMAND_TRACE"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(["sudo", *args]) + "\\n")
+if args and args[0] == "apt-get":
+    print("simulated package install failure")
+    raise SystemExit(42)
+os.execvp(args[0], args)
+""",
+    )
+    write_executable(
+        "docker",
+        """#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["DEEP_COMMAND_TRACE"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(["docker", *args]) + "\\n")
+if args == ["compose", "--env-file", ".env.regtest", "ps", "-q", "zallet"]:
+    print("0123456789abcdef0123456789abcdef")
+elif args == ["inspect", "-f", "{{.State.Pid}}", "0123456789abcdef0123456789abcdef"]:
+    print("12345")
+elif args[:1] == ["cp"]:
+    Path(args[-1]).write_bytes(b"fake-zallet-binary")
+else:
+    raise SystemExit(3)
+""",
+    )
+    write_executable(
+        "gdb",
+        """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["DEEP_COMMAND_TRACE"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(["gdb", *sys.argv[1:]]) + "\\n")
+print("Thread 1 (zallet)")
+print("#0 wallet_db_wait")
+print("frame value=fake-redaction-sentinel")
+""",
+    )
+    write_executable(
+        "strace",
+        """#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["DEEP_COMMAND_TRACE"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(["strace", *args]) + "\\n")
+out = Path(args[args.index("-o") + 1])
+line = 'openat(AT_FDCWD, "/var/lib/zallet/wallet.db", O_RDWR) = 3\\n'
+with out.open("w", encoding="utf-8") as f:
+    while f.tell() < 360000:
+        f.write(line)
+""",
+    )
+    write_executable(
+        "curl",
+        """#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+body = Path(args[args.index("-o") + 1])
+body.write_text('{"result":{}}', encoding="utf-8")
+payload = json.loads(args[args.index("-d") + 1])
+with open(os.environ["DEEP_CURL_TRACE"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(payload) + "\\n")
+print("200 0.001", end="")
+""",
+    )
+    write_executable("sleep", "#!/bin/sh\nexit 0\n")
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "DEEP_COMMAND_TRACE": str(command_trace),
+            "DEEP_CURL_TRACE": str(curl_trace),
+            "ZCANARY_DIAGNOSE_LIBRARY_ONLY": "1",
+            "ZCANARY_DEEP_STACKS": "1",
+            "ZCANARY_DIAGNOSTICS_FILE": str(output_dir / "wallet-startup.log"),
+            "ZCANARY_Z3_DIR": str(z3_dir),
+            "ZCANARY_NODE_PASSWORD": "deep-node-password",
+            "ZCANARY_ZALLET_PASSWORD": "deep-wallet-password",
+            "ZCANARY_TEST_TOKEN": "fake-redaction-sentinel",
+        }
+    )
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; run_deep_stack_diagnostics 55032',
+            "bash",
+            str(script_path),
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    rendered = proc.stdout + proc.stderr + (output_dir / "wallet-startup.log").read_text(encoding="utf-8")
+    assert "install gdb and strace (exit 42)" in rendered
+    assert "GDB attach and plain backtraces (exit 0)" in rendered
+    assert "strace selected syscalls (exit 0)" in rendered
+    assert "wallet.db openat lines=" in rendered
+    assert "Thread 1 (zallet)" in rendered
+    assert "fake-redaction-sentinel" not in rendered
+
+    gdb_output = output_dir / "zallet-gdb-threads.txt"
+    strace_output = output_dir / "zallet-strace.txt"
+    assert gdb_output.is_file() and "wallet_db_wait" in gdb_output.read_text(encoding="utf-8")
+    assert strace_output.is_file() and strace_output.stat().st_size <= 300000
+    assert "wallet.db" in strace_output.read_text(encoding="utf-8")
+    assert [json.loads(line)["params"] for line in curl_trace.read_text(encoding="utf-8").splitlines()] == [
+        ["deep"], ["deep2"]
+    ]
+
+    calls = [json.loads(line) for line in command_trace.read_text(encoding="utf-8").splitlines()]
+    copy_call = next(call for call in calls if call[:2] == ["docker", "cp"])
+    binary_path = Path(copy_call[-1])
+    assert str(binary_path).startswith("/tmp/zcanary-deep-stacks.")
+    assert not binary_path.exists() and not binary_path.parent.exists()
+    gdb_call = next(call for call in calls if call[:1] == ["gdb"])
+    assert gdb_call[:4] == ["gdb", "-batch", "-p", "12345"]
+    assert "set sysroot /proc/12345/root" in gdb_call
+    assert "info threads" in gdb_call
+    assert "thread apply all bt 40" in gdb_call
+    assert "bt full" not in gdb_call
+    assert gdb_call[-1].startswith("/tmp/zcanary-deep-stacks.")
+    strace_call = next(call for call in calls if call[:1] == ["strace"])
+    assert strace_call[strace_call.index("-e") + 1] == "trace=openat,futex,fcntl,flock,fsync,fdatasync"
+    assert strace_call[strace_call.index("-o") + 1] == str(strace_output)
+    assert all(name not in strace_call[strace_call.index("-e") + 1] for name in ("read", "write", "pread", "pwrite"))
+
+
 def test_diagnose_run_preserves_cpuinfo_and_existing_router_thread_overrides():
     spike = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
     diagnostic = (ROOT / "scripts" / "diagnose-wallet-path.sh").read_text(encoding="utf-8")
@@ -863,28 +1044,58 @@ def test_diagnose_workflow_is_manual_bounded_matrix_and_always_uploads_diagnosti
     assert 'WALLET_RPC_WAIT_BUDGET: "180"' in workflow
     assert "strategy:" in workflow and "fail-fast: false" in workflow
     assert re.search(r"(?m)^\s+matrix:", workflow)
-    assert workflow.count("zallet_name:") == 3
+    assert workflow.count("zallet_name:") == 4
     assert "zallet_name: beta1" in workflow
     assert "zallet_name: beta1-cpufix" in workflow
     assert "zallet_name: beta3-cpufix" in workflow
+    assert "zallet_name: beta2" in workflow
     assert "artifact_name: zcanary-wallet-path-diagnostics-beta1" in workflow
     assert "artifact_name: zcanary-wallet-path-diagnostics-beta1-cpufix" in workflow
     assert "artifact_name: zcanary-wallet-path-diagnostics-beta3-cpufix" in workflow
-    assert workflow.count("artifact_name:") == 3
+    assert "artifact_name: zcanary-wallet-path-diagnostics-beta2" in workflow
+    assert workflow.count("artifact_name:") == 4
     assert "zallet_name: beta3\n" not in workflow
     assert "artifact_name: zcanary-wallet-path-diagnostics-beta3\n" not in workflow
     assert "threads8" not in workflow
-    assert workflow.count('physical_cpu_workaround: "off"') == 1
+    assert workflow.count('physical_cpu_workaround: "off"') == 2
     assert workflow.count('physical_cpu_workaround: "on"') == 2
+    assert workflow.count('deep_stacks: "1"') == 2
+    assert workflow.count('deep_stacks: "0"') == 2
+    variants = {
+        block.splitlines()[0]: block
+        for block in re.split(r"(?m)^          - zallet_name: ", workflow)[1:]
+    }
+    for variant, workaround, deep_stacks in (
+        ("beta1", "off", "1"),
+        ("beta1-cpufix", "on", "1"),
+        ("beta3-cpufix", "on", "0"),
+        ("beta2", "off", "0"),
+    ):
+        block = variants[variant]
+        assert f'physical_cpu_workaround: "{workaround}"' in block
+        assert f'deep_stacks: "{deep_stacks}"' in block
     assert "ZCANARY_ZALLET_PHYSICAL_CPU_WORKAROUND: ${{ matrix.physical_cpu_workaround }}" in workflow
+    assert "ZCANARY_DEEP_STACKS: ${{ matrix.deep_stacks }}" in workflow
     assert "ZCANARY_ZALLET_TOKIO_WORKER_THREADS" not in workflow
     assert "zallet_version: 0.1.0-beta.1" in workflow and "zallet_version: 0.1.0-beta.3" in workflow
+    assert "zallet_version: 0.1.0-beta.2" in workflow
+    assert "zodlinc/zallet:v0.1.0-beta.2" in workflow
+    assert "zodlinc/zallet:v0.1.0-beta.2@sha256" not in workflow
+    beta2 = re.search(r"(?ms)- zallet_name: beta2\n(.*?)(?=\n          - zallet_name:|\n    env:)", workflow)
+    assert beta2 is not None
+    assert 'physical_cpu_workaround: "off"' in beta2.group(1)
+    assert 'deep_stacks: "0"' in beta2.group(1)
     assert "zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d" in workflow
     assert "zodlinc/zallet:v0.1.0-beta.3@sha256:54d1a774317371b1e88c8a54712cdfa4aa7d8f20ae2a0205f9a190e502aef0f6" in workflow
     assert "Z3_ZALLET_IMAGE: ${{ matrix.zallet_image }}" in workflow
     assert "ZCANARY_ZALLET_VERSION: ${{ matrix.zallet_version }}" in workflow
     assert "Z3_REF: e84ce9fd8e864ff0b2a8a62f6ce14392145db0fb" in workflow
     assert "bash scripts/prepare-regtest.sh" in workflow
+    assert "Best-effort beta2 Zallet image pull" in workflow
+    assert "Record beta2 prepare outcome" in workflow
+    assert "steps.prepare.outcome" in workflow
+    assert "zallet-image-pull.txt" in workflow
+    assert "continue-on-error: ${{ matrix.zallet_name == 'beta2' }}" in workflow
     assert "ZCANARY_DIAG_PREPARE_STARTED_EPOCH" in workflow
     probe_step = workflow.split("name: Run wallet path probes after prepare", 1)[1].split("      - name:", 1)[0]
     assert "if: always()" in probe_step
@@ -900,6 +1111,7 @@ def test_diagnose_workflow_is_manual_bounded_matrix_and_always_uploads_diagnosti
     spike = (ROOT / "scripts" / "spike.sh").read_text(encoding="utf-8")
     assert "Z3_ZALLET_IMAGE=${Z3_ZALLET_IMAGE:-zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d}" in spike
     assert 'version == "0.1.0-beta.3" and "allow_insecure_remote_bind" not in text' in spike
+    assert "0.1.0-beta.2) ;;" in spike
     assert 'allow_insecure_remote_bind = true' in spike
 
 

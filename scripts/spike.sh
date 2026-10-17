@@ -207,6 +207,7 @@ if [ -z "${KEEP:-}" ]; then
   ZCANARY_ZALLET_VERSION=${ZCANARY_ZALLET_VERSION:-0.1.0-beta.1}
   case "$ZCANARY_ZALLET_VERSION" in
     0.1.0-beta.1) ;;
+    0.1.0-beta.2) ;;
     0.1.0-beta.3) ;;
     *) echo "unsupported Zallet version profile" >&2; exit 1 ;;
   esac

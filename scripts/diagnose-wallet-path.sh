@@ -54,6 +54,11 @@ case "$ZCANARY_DIAGNOSTIC_ELAPSED_S" in
   ''|*[!0-9]*) ZCANARY_DIAGNOSTIC_ELAPSED_S=0 ;;
 esac
 DIAGNOSTIC_ELAPSED_S=${ZCANARY_DIAGNOSTIC_ELAPSED_S}
+ZCANARY_DEEP_STACKS=${ZCANARY_DEEP_STACKS:-0}
+case "$ZCANARY_DEEP_STACKS" in
+  0|1) ;;
+  *) echo "invalid deep-stack setting; expected 0 or 1" >&2; exit 2 ;;
+esac
 
 # Z3's pinned .env.regtest sets COMPOSE_FILE explicitly, so create a separate,
 # generated overlay for opt-in router logging, worker settings, and the CPU-info mount.
@@ -94,9 +99,15 @@ if { [ "$ROUTER_LOG_INFO" = 1 ] || [ -n "$ZALLET_TOKIO_WORKER_THREADS" ] \
   export COMPOSE_FILE=docker-compose.yml:docker-compose.regtest.yml:docker-compose.regtest.override.yml
 fi
 PROBE_TEMP_FILES=()
+DEEP_STACK_TEMP_DIR=""
+DEEP_STACK_OWNER_PID=$BASHPID
 cleanup_probe_temp_files() {
   if ((${#PROBE_TEMP_FILES[@]})); then
-    rm -f -- "${PROBE_TEMP_FILES[@]}"
+    rm -f -- "${PROBE_TEMP_FILES[@]}" || true
+  fi
+  if [ "$BASHPID" = "$DEEP_STACK_OWNER_PID" ] && [[ "$DEEP_STACK_TEMP_DIR" == /tmp/zcanary-deep-stacks.* ]]; then
+    rm -rf -- "$DEEP_STACK_TEMP_DIR" || true
+    DEEP_STACK_TEMP_DIR=""
   fi
 }
 trap cleanup_probe_temp_files EXIT
@@ -494,6 +505,226 @@ run_early_z_getnewaccount_probes() {
   done
 }
 
+deep_stack_log_status() {
+  local label="$1" result="$2"
+  printf '==> deep stacks: %s (exit %s)\n' "$label" "$result" \
+    | tee -a "$DIAGNOSTICS_FILE" >&2 || true
+}
+
+DEEP_STACK_LAST_STATUS=0
+DEEP_STACK_CAPTURED_OUTPUT=""
+deep_stack_run_step() {
+  local label="$1" capture_file status
+  shift
+  if capture_file=$(mktemp /tmp/zcanary-deep-step.XXXXXX); then
+    if "$@" >"$capture_file" 2>&1; then
+      status=0
+    else
+      status=$?
+    fi
+    {
+      printf '==> deep stacks: %s (exit %s)\n' "$label" "$status"
+      redact_diagnostic < "$capture_file"
+    } | tee -a "$DIAGNOSTICS_FILE" >&2 || true
+    rm -f -- "$capture_file" || true
+  else
+    status=$?
+    deep_stack_log_status "$label (temporary log unavailable)" "$status"
+  fi
+  DEEP_STACK_LAST_STATUS=$status
+  return 0
+}
+
+deep_stack_capture_output() {
+  local label="$1" error_file status
+  shift
+  DEEP_STACK_CAPTURED_OUTPUT=""
+  if error_file=$(mktemp /tmp/zcanary-deep-step.XXXXXX); then
+    if DEEP_STACK_CAPTURED_OUTPUT=$("$@" 2>"$error_file"); then
+      status=0
+    else
+      status=$?
+      DEEP_STACK_CAPTURED_OUTPUT=""
+    fi
+    {
+      printf '==> deep stacks: %s (exit %s)\n' "$label" "$status"
+      if [ -s "$error_file" ]; then
+        redact_diagnostic < "$error_file"
+      fi
+    } | tee -a "$DIAGNOSTICS_FILE" >&2 || true
+    rm -f -- "$error_file" || true
+  else
+    status=$?
+    deep_stack_log_status "$label (temporary log unavailable)" "$status"
+  fi
+  DEEP_STACK_LAST_STATUS=$status
+  return 0
+}
+
+deep_stack_compose_ps_zallet() {
+  (cd "$Z3_DIR" && timeout --kill-after=1s 10s docker compose --env-file .env.regtest ps -q zallet)
+}
+
+remove_deep_stack_temp_dir() {
+  local status
+  [ -n "$DEEP_STACK_TEMP_DIR" ] || return 0
+  if [[ "$DEEP_STACK_TEMP_DIR" != /tmp/zcanary-deep-stacks.* ]]; then
+    deep_stack_log_status "refuse unexpected temporary path cleanup" 2
+    return 0
+  fi
+  if rm -rf -- "$DEEP_STACK_TEMP_DIR"; then
+    status=0
+    DEEP_STACK_TEMP_DIR=""
+  else
+    status=$?
+  fi
+  deep_stack_log_status "delete temporary Zallet binary and strace cap scratch" "$status"
+}
+
+run_deep_stack_diagnostics() {
+  local host_port="$1" output_dir gdb_output strace_output cap_strace_temp binary_path
+  local CID="" PID="" rpc_deep_pid="" rpc_deep2_pid="" binary_ready=0 status count
+  output_dir=$(dirname "$DIAGNOSTICS_FILE")
+  if mkdir -p "$output_dir"; then
+    status=0
+  else
+    status=$?
+  fi
+  deep_stack_log_status "ensure diagnostic artifact directory" "$status"
+  gdb_output="$output_dir/zallet-gdb-threads.txt"
+  strace_output="$output_dir/zallet-strace.txt"
+  if : > "$gdb_output"; then status=0; else status=$?; fi
+  deep_stack_log_status "initialize GDB artifact" "$status"
+  if : > "$strace_output"; then status=0; else status=$?; fi
+  deep_stack_log_status "initialize strace artifact" "$status"
+
+  if DEEP_STACK_TEMP_DIR=$(mktemp -d /tmp/zcanary-deep-stacks.XXXXXX); then
+    status=0
+  else
+    status=$?
+    DEEP_STACK_TEMP_DIR=""
+  fi
+  deep_stack_log_status "create temporary directory outside out" "$status"
+  binary_path="$DEEP_STACK_TEMP_DIR/zallet-zaino"
+  cap_strace_temp="$DEEP_STACK_TEMP_DIR/zallet-strace.capped"
+
+  deep_stack_run_step "install gdb and strace" sudo apt-get install -y gdb strace
+
+  deep_stack_capture_output "docker compose ps -q zallet" deep_stack_compose_ps_zallet
+  CID=${DEEP_STACK_CAPTURED_OUTPUT%%$'\n'*}
+  if [[ "$CID" =~ ^[[:xdigit:]]{12,64}$ ]]; then
+    deep_stack_log_status "validate Zallet container ID" 0
+  else
+    CID=""
+    deep_stack_log_status "validate Zallet container ID" 1
+  fi
+
+  if [ -n "$CID" ]; then
+    deep_stack_capture_output "docker inspect PID" timeout --kill-after=1s 10s docker inspect -f '{{.State.Pid}}' "$CID"
+    PID=${DEEP_STACK_CAPTURED_OUTPUT%%$'\n'*}
+    if [[ "$PID" =~ ^[1-9][0-9]*$ ]]; then
+      deep_stack_log_status "validate Zallet PID" 0
+    else
+      PID=""
+      deep_stack_log_status "validate Zallet PID" 1
+    fi
+  else
+    deep_stack_log_status "docker inspect PID" "not-run (container ID unavailable)"
+  fi
+
+  if [ -n "$CID" ] && [ -n "$DEEP_STACK_TEMP_DIR" ]; then
+    deep_stack_run_step "copy /usr/local/bin/zallet-zaino outside out" timeout --kill-after=1s 30s \
+      docker cp "$CID:/usr/local/bin/zallet-zaino" "$binary_path"
+    if [ "$DEEP_STACK_LAST_STATUS" -eq 0 ] && [ -s "$binary_path" ]; then
+      binary_ready=1
+      deep_stack_log_status "verify temporary Zallet binary" 0
+    else
+      deep_stack_log_status "verify temporary Zallet binary" 1
+    fi
+  else
+    deep_stack_log_status "docker cp Zallet binary outside out" "not-run (container or temporary directory unavailable)"
+  fi
+
+  run_probe "deep stack z_getnewaccount [deep] (45-second timeout)" \
+    "http://127.0.0.1:$host_port" POST z_getnewaccount basic \
+    "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 45 '["deep"]' 400 &
+  rpc_deep_pid=$!
+  deep_stack_log_status "start background z_getnewaccount [deep] (pid=$rpc_deep_pid)" 0
+  deep_stack_run_step "sleep 6 seconds before GDB attach" sleep 6
+
+  if [ -n "$PID" ] && [ "$binary_ready" -eq 1 ]; then
+    if sudo timeout 60 gdb -batch -p "$PID" \
+      -ex "set sysroot /proc/$PID/root" \
+      -ex "info threads" \
+      -ex "thread apply all bt 40" "$binary_path" > "$gdb_output" 2>&1; then
+      status=0
+    else
+      status=$?
+    fi
+    deep_stack_log_status "GDB attach and plain backtraces" "$status"
+  else
+    deep_stack_log_status "GDB attach and plain backtraces" "not-run (PID or binary unavailable)"
+  fi
+
+  run_probe "deep stack z_getnewaccount [deep2] (45-second timeout)" \
+    "http://127.0.0.1:$host_port" POST z_getnewaccount basic \
+    "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD" 45 '["deep2"]' 400 &
+  rpc_deep2_pid=$!
+  deep_stack_log_status "start background z_getnewaccount [deep2] (pid=$rpc_deep2_pid)" 0
+
+  if [ -n "$PID" ] && [ -n "$DEEP_STACK_TEMP_DIR" ]; then
+    deep_stack_run_step "strace selected syscalls" sudo timeout 12 strace -f -tt -p "$PID" \
+      -e trace=openat,futex,fcntl,flock,fsync,fdatasync -o "$strace_output"
+  else
+    DEEP_STACK_LAST_STATUS=1
+    deep_stack_log_status "strace selected syscalls" "not-run (PID or temporary directory unavailable)"
+  fi
+  if [ -f "$strace_output" ] && [ "$(wc -c < "$strace_output")" -gt 300000 ]; then
+    if [ -n "$DEEP_STACK_TEMP_DIR" ] \
+      && head -c 300000 "$strace_output" > "$cap_strace_temp" \
+      && mv -f -- "$cap_strace_temp" "$strace_output"; then
+      status=0
+    elif truncate -s 300000 "$strace_output"; then
+      status=0
+    else
+      status=$?
+    fi
+  else
+    status=0
+  fi
+  deep_stack_log_status "cap strace artifact at 300000 bytes" "$status"
+
+  if wait "$rpc_deep_pid"; then status=0; else status=$?; fi
+  deep_stack_log_status "wait for z_getnewaccount [deep]" "$status"
+  if wait "$rpc_deep2_pid"; then status=0; else status=$?; fi
+  deep_stack_log_status "wait for z_getnewaccount [deep2]" "$status"
+
+  if count=$(awk '/openat/ && /wallet[.]db/ {n++} END {print n+0}' "$strace_output" 2>/dev/null); then
+    status=0
+  else
+    status=$?
+    count=0
+  fi
+  printf 'Deep stacks: wallet.db openat lines=%s\n' "$count" \
+    | tee -a "$DIAGNOSTICS_FILE" >&2 || true
+  deep_stack_log_status "count wallet.db openat lines" "$status"
+  printf '==> deep stacks: first 60 GDB lines (redacted)\n' \
+    | tee -a "$DIAGNOSTICS_FILE" >&2 || true
+  if head -n 60 "$gdb_output" | redact_diagnostic | tee -a "$DIAGNOSTICS_FILE" >&2; then
+    status=0
+  else
+    status=$?
+  fi
+  deep_stack_log_status "print first 60 GDB lines through redact_diagnostic" "$status"
+
+  if [ -f "$gdb_output" ]; then status=0; else status=1; fi
+  deep_stack_log_status "GDB output included in diagnostics artifact" "$status"
+  if [ -f "$strace_output" ] && [ "$(wc -c < "$strace_output")" -le 300000 ]; then status=0; else status=1; fi
+  deep_stack_log_status "capped strace output included in diagnostics artifact" "$status"
+  remove_deep_stack_temp_dir
+  return 0
+}
+
 run_wallet_path_probes() {
   local mapping_output mapping_exit mapping_line safe_mapping_line host_port
   local zallet_container_name inflight_probe_pid
@@ -596,6 +827,9 @@ run_wallet_path_probes() {
     "docker compose --env-file .env.regtest logs --no-color --tail 200 zallet" \
     "$Z3_DIR" 200 \
     timeout --kill-after=1s 10s docker compose --env-file .env.regtest logs --no-color --tail 200 zallet
+  if [ "$ZCANARY_DEEP_STACKS" = 1 ]; then
+    run_deep_stack_diagnostics "$host_port"
+  fi
   printf '==> wallet path probes complete batch=%s elapsed=%ss\n' \
     "$DIAGNOSTIC_BATCH" "$DIAGNOSTIC_ELAPSED_S" | tee -a "$DIAGNOSTICS_FILE"
 }
