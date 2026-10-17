@@ -8,9 +8,21 @@ permissions:
 
 jobs:
   diagnose:
-    name: Regtest wallet path diagnosis
+    name: Regtest wallet path diagnosis (${{ matrix.zallet_name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - zallet_name: beta1
+            zallet_version: 0.1.0-beta.1
+            zallet_image: zodlinc/zallet:v0.1.0-beta.1@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d
+            artifact_name: zcanary-wallet-path-diagnostics-beta1
+          - zallet_name: beta3
+            zallet_version: 0.1.0-beta.3
+            zallet_image: zodlinc/zallet:v0.1.0-beta.3@sha256:54d1a774317371b1e88c8a54712cdfa4aa7d8f20ae2a0205f9a190e502aef0f6
+            artifact_name: zcanary-wallet-path-diagnostics-beta3
     env:
       # Reuse the two private-regtest password secrets from the integration job.
       ZCANARY_ZEBRA_PASSWORD: ${{ secrets.ZCANARY_ZEBRA_PASSWORD }}
@@ -20,6 +32,9 @@ jobs:
       ZCANARY_ZALLET_USER: zebra
       Z3_REGTEST_RPC_ROUTER_USER: zebra
       Z3_REGTEST_RPC_ROUTER_PASSWORD: ${{ secrets.ZCANARY_ZALLET_PASSWORD }}
+      Z3_REF: e84ce9fd8e864ff0b2a8a62f6ce14392145db0fb
+      Z3_ZALLET_IMAGE: ${{ matrix.zallet_image }}
+      ZCANARY_ZALLET_VERSION: ${{ matrix.zallet_version }}
       Z3_ZALLET_RUST_LOG: debug
       ZCANARY_ROUTER_LOG_INFO: "1"
       # Keep this manual diagnostic run short; the normal CI wait remains six minutes.
@@ -55,7 +70,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: zcanary-wallet-path-diagnostics
+          name: ${{ matrix.artifact_name }}
           path: out/diagnostics
           if-no-files-found: warn
           retention-days: 14

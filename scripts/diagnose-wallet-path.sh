@@ -59,6 +59,38 @@ escape_curl_config() {
   printf '%s' "$value"
 }
 
+report_wallet_password_sanity() {
+  local password="$ZCANARY_ZALLET_PASSWORD"
+  local contains_whitespace=no contains_non_hex=no
+  if [[ "$password" =~ [[:space:]] ]]; then
+    contains_whitespace=yes
+  fi
+  if [[ "$password" =~ [^0-9A-Fa-f] ]]; then
+    contains_non_hex=yes
+  fi
+  printf 'Zallet password sanity: length=%d; contains_whitespace=%s; contains_non_hex=%s\n' \
+    "${#password}" "$contains_whitespace" "$contains_non_hex"
+}
+
+append_redacted_lines() {
+  local output_file="$1" label="$2" working_dir="$3" line_count="$4"
+  shift 4
+  local log_file status
+  mkdir -p "$(dirname "$output_file")"
+  log_file=$(mktemp "${TMPDIR:-/tmp}/zcanary-diagnostics.XXXXXX") || return 0
+  if (cd "$working_dir" && "$@") >"$log_file" 2>&1; then
+    status=0
+  else
+    status=$?
+  fi
+  {
+    printf '==> %s (exit %s); last %s output lines follow\n' "$label" "$status" "$line_count"
+    tail -n "$line_count" -- "$log_file" | redact_diagnostic
+  } | tee -a "$output_file" >&2 || true
+  rm -f "$log_file"
+  return 0
+}
+
 run_probe() {
   local label="$1" url="$2" verb="$3" rpc_method="$4" auth_mode="$5"
   local auth_user="${6:-}" auth_password="${7:-}"
@@ -119,10 +151,16 @@ run_probe() {
 
 run_wallet_path_probes() {
   local mapping_output mapping_exit mapping_line host_port
+  local wrong_password="zcanary-diagnostic-invalid-password"
+  while [ "$wrong_password" = "$ZCANARY_ZALLET_PASSWORD" ] || [ "$wrong_password" = "$ROUTER_PASSWORD" ]; do
+    wrong_password="${wrong_password}x"
+  done
+  export ZCANARY_DIAGNOSTIC_WRONG_PASSWORD="$wrong_password"
 
   printf "\n==> wallet path probes batch=%s elapsed=${ZCANARY_DIAGNOSTIC_ELAPSED_S}s at %s\n" \
     "$DIAGNOSTIC_BATCH" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     | tee -a "$DIAGNOSTICS_FILE"
+  report_wallet_password_sanity | tee -a "$DIAGNOSTICS_FILE"
   append_redacted_tail \
     "$DIAGNOSTICS_FILE" \
     "docker compose --env-file .env.regtest ps" \
@@ -151,7 +189,7 @@ run_wallet_path_probes() {
     "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
   run_probe "d. Router -> Zallet" "http://127.0.0.1:8181" POST z_listaccounts basic \
     "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
-  run_probe "e. Zallet direct (wallet credentials)" "http://127.0.0.1:$host_port" \
+  run_probe "e. Zallet direct z_listaccounts (wallet credentials)" "http://127.0.0.1:$host_port" \
     POST z_listaccounts basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
   run_probe "f. Zallet direct (router credentials)" "http://127.0.0.1:$host_port" \
     POST z_listaccounts basic "$ROUTER_USER" "$ROUTER_PASSWORD"
@@ -161,6 +199,33 @@ run_wallet_path_probes() {
     POST getinfo none
   run_probe "i. Zallet direct getinfo (Basic auth)" "http://127.0.0.1:$host_port" \
     POST getinfo basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
+  run_probe "j. Zallet direct getwalletinfo (wallet credentials)" "http://127.0.0.1:$host_port" \
+    POST getwalletinfo basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
+  run_probe "k. Zallet direct help (wallet credentials)" "http://127.0.0.1:$host_port" \
+    POST help basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
+  run_probe "l. Zallet direct rpc.discover (wallet credentials)" "http://127.0.0.1:$host_port" \
+    POST rpc.discover basic "$WALLET_USER" "$ZCANARY_ZALLET_PASSWORD"
+  run_probe "m. Zallet direct getwalletinfo (wrong password; expect fast 401)" "http://127.0.0.1:$host_port" \
+    POST getwalletinfo basic "$WALLET_USER" "$wrong_password"
+  run_probe "n. Zallet direct getwalletinfo (zebra:zebra credentials)" "http://127.0.0.1:$host_port" \
+    POST getwalletinfo basic zebra zebra
+
+  printf '==> post-probe runtime snapshots\n' | tee -a "$DIAGNOSTICS_FILE"
+  append_redacted_tail \
+    "$DIAGNOSTICS_FILE" \
+    "docker compose --env-file .env.regtest top zallet" \
+    "$Z3_DIR" \
+    timeout --kill-after=1s 10s docker compose --env-file .env.regtest top zallet
+  append_redacted_tail \
+    "$DIAGNOSTICS_FILE" \
+    "docker stats --no-stream" \
+    "$Z3_DIR" \
+    timeout --kill-after=1s 10s docker stats --no-stream
+  append_redacted_lines \
+    "$DIAGNOSTICS_FILE" \
+    "docker compose --env-file .env.regtest logs --no-color --tail 200 zallet" \
+    "$Z3_DIR" 200 \
+    timeout --kill-after=1s 10s docker compose --env-file .env.regtest logs --no-color --tail 200 zallet
 
   printf '==> wallet path probes complete batch=%s elapsed=%ss\n' \
     "$DIAGNOSTIC_BATCH" "$DIAGNOSTIC_ELAPSED_S" | tee -a "$DIAGNOSTICS_FILE"
