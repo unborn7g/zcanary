@@ -540,6 +540,59 @@ def run(cfg_path: str) -> int:
             except OSError:
                 execution_errors.append("could not collect redacted regtest diagnostics")
 
+
+    # The checks query the live node and wallet, so the disposable network is stopped
+    # only after those queries (and any failure diagnostics) are done.
+    try:
+        txid = result.get("txid")
+        if not isinstance(txid, str) or not txid:
+            txid = None
+        recipient = result.get("recipient_address") or (context or {}).get("recipient_address")
+        if not isinstance(recipient, str) or not recipient:
+            recipient = None
+        recipient_account = result.get("recipient_account") or (context or {}).get("recipient_account")
+        if not isinstance(recipient_account, str):
+            recipient_account = None
+        app_network = result.get("app_network")
+        if not isinstance(app_network, str):
+            app_network = None
+        app_genesis_hash = result.get("app_genesis_hash")
+        if not isinstance(app_genesis_hash, str):
+            app_genesis_hash = None
+
+        zebra, zallet = Zebra(cfg.zebra, cfg.timeout_s), Zallet(cfg.zallet, cfg.timeout_s)
+        errors: dict[str, str] = {}
+        chain, e = _try(zebra.chain)
+        if e:
+            errors.setdefault("getblockchaininfo", e)
+        genesis, e = _try(zebra.genesis)
+        if e:
+            errors.setdefault("getblockhash", e)
+        rcv = rcv_err = None
+        if recipient and isinstance(recipient, str) and recipient.lower().startswith("u"):
+            rcv, rcv_err = _try(zebra.receivers, recipient)
+        raw = summary = block = deltas = view = None
+        if isinstance(txid, str) and txid:
+            raw, e = _try(zebra.rawtx, txid)
+            if e:
+                errors.setdefault("getrawtransaction", e)
+            if raw:
+                summary = txmod.classify(raw)
+                if raw.get("blockhash"):
+                    block, e = _try(zebra.block, raw["blockhash"])
+                    if e:
+                        errors.setdefault("getblock", e)
+                    deltas = pools.block_deltas(block) if block else None
+            view, e = _try(zallet.view, txid)
+            if e:
+                errors.setdefault("z_viewtransaction", e)
+
+        if execution_errors or errors:
+            try:
+                _ensure_regtest_diagnostics(startup_diagnostics_path, env)
+            except OSError:
+                execution_errors.append("could not collect redacted regtest diagnostics")
+    finally:
         if cfg.stop_command and network_start_attempted:
             steps["network.stop"], out = _run_command(
                 "network.stop", cfg.stop_command, base, env, cfg.command_timeout_s
@@ -549,55 +602,6 @@ def run(cfg_path: str) -> int:
                 execution_errors.append("network stop command did not complete successfully")
         else:
             steps["network.stop"] = {"status": "skipped", "reason": "no command configured or network not started"}
-
-    txid = result.get("txid")
-    if not isinstance(txid, str) or not txid:
-        txid = None
-    recipient = result.get("recipient_address") or (context or {}).get("recipient_address")
-    if not isinstance(recipient, str) or not recipient:
-        recipient = None
-    recipient_account = result.get("recipient_account") or (context or {}).get("recipient_account")
-    if not isinstance(recipient_account, str):
-        recipient_account = None
-    app_network = result.get("app_network")
-    if not isinstance(app_network, str):
-        app_network = None
-    app_genesis_hash = result.get("app_genesis_hash")
-    if not isinstance(app_genesis_hash, str):
-        app_genesis_hash = None
-
-    zebra, zallet = Zebra(cfg.zebra, cfg.timeout_s), Zallet(cfg.zallet, cfg.timeout_s)
-    errors: dict[str, str] = {}
-    chain, e = _try(zebra.chain)
-    if e:
-        errors.setdefault("getblockchaininfo", e)
-    genesis, e = _try(zebra.genesis)
-    if e:
-        errors.setdefault("getblockhash", e)
-    rcv = rcv_err = None
-    if recipient and isinstance(recipient, str) and recipient.lower().startswith("u"):
-        rcv, rcv_err = _try(zebra.receivers, recipient)
-    raw = summary = block = deltas = view = None
-    if isinstance(txid, str) and txid:
-        raw, e = _try(zebra.rawtx, txid)
-        if e:
-            errors.setdefault("getrawtransaction", e)
-        if raw:
-            summary = txmod.classify(raw)
-            if raw.get("blockhash"):
-                block, e = _try(zebra.block, raw["blockhash"])
-                if e:
-                    errors.setdefault("getblock", e)
-                deltas = pools.block_deltas(block) if block else None
-        view, e = _try(zallet.view, txid)
-        if e:
-            errors.setdefault("z_viewtransaction", e)
-
-    if execution_errors or errors:
-        try:
-            _ensure_regtest_diagnostics(startup_diagnostics_path, env)
-        except OSError:
-            execution_errors.append("could not collect redacted regtest diagnostics")
 
     results = [
         checks.c1(cfg.network, chain, recipient, genesis, app_network, app_genesis_hash),

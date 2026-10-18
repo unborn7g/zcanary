@@ -203,7 +203,25 @@ if [ -z "${KEEP:-}" ]; then
   docker volume rm -f z3-regtest-zallet z3-regtest-chain >/dev/null 2>&1 || true
   # The pinned Z3 initializer derives Zallet's auth hash from this env value.
   export Z3_REGTEST_RPC_ROUTER_PASSWORD="$ZCANARY_ZALLET_PASSWORD"
+  # Z3 copies its config templates only on first run. A leftover zallet.toml holds the
+  # password hash of an earlier run, so the router's new password would be rejected (401).
+  rm -f config/regtest/zallet.toml config/regtest/zebra.toml
   run_with_tail "regtest-init --prepare-only" ./scripts/regtest-init.sh --prepare-only
+  [ -f config/regtest/zebra.toml ] || cp config/regtest/zebra.toml.example config/regtest/zebra.toml
+  # Regtest has no peers. Without this, Zebra 6.2.3 resolves public testnet seed names at
+  # startup and does not open its RPC port until DNS answers, which fails on hosts where
+  # container DNS is restricted.
+  python3 - "config/regtest/zebra.toml" <<'PYZEBRA'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+if "initial_testnet_peers" not in text:
+    needle = 'network = "Regtest"\n'
+    if needle not in text:
+        raise SystemExit("pinned Zebra config has no Regtest network line")
+    path.write_text(text.replace(needle, needle + "initial_testnet_peers = []\n", 1), encoding="utf-8")
+PYZEBRA
   ZCANARY_ZALLET_VERSION=${ZCANARY_ZALLET_VERSION:-0.1.0-beta.1}
   case "$ZCANARY_ZALLET_VERSION" in
     0.1.0-beta.1) ;;
@@ -361,11 +379,12 @@ complete_phase "accounts"
 # plus transparent coinbase maturity blocks for the pinned test wallet.
 begin_phase "mine-shielded-block"
 log "mining: 1 shielded-coinbase block to sender"
-rpc_node generatetoaddress "[1,\"$S_ORCH\"]" >/dev/null
+MINING_RPC_MAX_TIME=${ZCANARY_MINING_RPC_MAX_TIME:-300}
+RPC_MAX_TIME="$MINING_RPC_MAX_TIME" rpc_node generatetoaddress "[1,\"$S_ORCH\"]" >/dev/null
 complete_phase "mine-shielded-block"
 begin_phase "mine-maturity-blocks"
 log "mining: 100 transparent coinbase maturity blocks"
-rpc_node generatetoaddress "[100,\"$S_T\"]" >/dev/null
+RPC_MAX_TIME="$MINING_RPC_MAX_TIME" rpc_node generatetoaddress "[100,\"$S_T\"]" >/dev/null
 complete_phase "mine-maturity-blocks"
 begin_phase "funding-sync"
 sleep 8
@@ -419,7 +438,7 @@ ACTIVE_PHASE="payment-result-check"
 ACTIVE_PHASE=""
 TXID=$(j "d['result'][0]['result']['txid']" < "$OUT/op.json"); echo "$TXID" > "$OUT/txid"
 begin_phase "mine-confirmation-block"
-rpc_node generate '[1]' >/dev/null
+RPC_MAX_TIME="${MINING_RPC_MAX_TIME:-300}" rpc_node generate '[1]' >/dev/null
 sleep 8
 complete_phase "mine-confirmation-block"
 

@@ -43,7 +43,7 @@ try:
     payload=json.load(sys.stdin)
 except (json.JSONDecodeError, UnicodeDecodeError):
     sys.exit(1)
-if not isinstance(payload, dict) or "error" not in payload or payload["error"] is not None or not isinstance(payload.get("result"), list):
+if not isinstance(payload, dict) or payload.get("error") is not None or not isinstance(payload.get("result"), list):
     sys.exit(1)'; then
       WALLET_RPC_LAST_REASON=ready
       return 0
