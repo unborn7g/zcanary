@@ -22,6 +22,16 @@ class AppError(RuntimeError):
     pass
 
 
+class RpcMethodError(AppError):
+    """The wallet answered with a JSON-RPC error object."""
+
+    def __init__(self, method: str, code: Any, message: str) -> None:
+        super().__init__("wallet RPC method failed")
+        self.method = method
+        self.code = code
+        self.message = message
+
+
 def rpc(method: str, *params: Any) -> Any:
     url = os.environ.get("ZCANARY_ZALLET_RPC", "")
     user = os.environ.get("ZCANARY_ZALLET_USER", "")
@@ -43,8 +53,13 @@ def rpc(method: str, *params: Any) -> Any:
             payload = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
         raise AppError("wallet RPC request failed") from None
-    if not isinstance(payload, dict) or payload.get("error"):
+    if not isinstance(payload, dict):
         raise AppError("wallet RPC method failed")
+    error = payload.get("error")
+    if error:
+        if isinstance(error, dict):
+            raise RpcMethodError(method, error.get("code"), str(error.get("message", ""))[:200])
+        raise RpcMethodError(method, None, "")
     return payload.get("result")
 
 
@@ -76,6 +91,15 @@ def _receivers(address: str) -> dict[str, str]:
     if not isinstance(result, dict):
         raise AppError("wallet did not return receiver information")
     return {str(k): str(v) for k, v in result.items()}
+
+
+def _note(log_file: Path, memo: str, text: str) -> None:
+    """Append a short diagnostic line to the app log without ever writing the memo marker."""
+    try:
+        with log_file.open("a", encoding="utf-8") as handle:
+            handle.write(text.replace(memo, "<memo>") + "\n")
+    except OSError:
+        pass
 
 
 def _app_identity() -> tuple[str, str]:
@@ -123,6 +147,7 @@ def _pay(mode: str) -> None:
     app_network, app_genesis_hash = _app_identity()
     payment_address = requested_address
     policy = "FullPrivacy"
+    policy_fallbacks: list[str] = []
     amounts: list[dict[str, Any]]
     if mode == "transparent-fallback":
         payment_address = os.environ.get("ZCANARY_TRANSPARENT_RECEIVER", "")
@@ -131,7 +156,11 @@ def _pay(mode: str) -> None:
         if not payment_address:
             raise AppError("test context lacks the requested transparent receiver")
         # Deliberately reproduce transparent routing; FullPrivacy should not pick this path.
-        policy = "AllowRevealedAmounts"
+        # Paying a transparent address reveals the recipient, so the policy must allow that;
+        # AllowRevealedAmounts only covers crossing shielded pools. Try the narrowest policy
+        # that permits a shielded-to-transparent payment first.
+        policy = "AllowRevealedRecipients"
+        policy_fallbacks = ["NoPrivacy"]
         amounts = [{"address": payment_address, "amount": _amount()}]
     elif mode == "cross-pool-payer":
         payment_address = os.environ.get("ZCANARY_SAPLING_RECEIVER", "")
@@ -148,7 +177,16 @@ def _pay(mode: str) -> None:
     else:
         amounts = [{"address": payment_address, "amount": _amount(), "memo": memo.encode().hex()}]
 
-    opid = rpc("z_sendmany", sender, amounts, 1, None, policy)
+    opid = None
+    for candidate in [policy, *policy_fallbacks]:
+        try:
+            opid = rpc("z_sendmany", sender, amounts, 1, None, candidate)
+            break
+        except RpcMethodError as e:
+            # A wrong policy name or a policy that is too strict is rejected synchronously.
+            _note(log_file, memo, f"z_sendmany policy {candidate} rejected: code={e.code} message={e.message}")
+            if candidate == [policy, *policy_fallbacks][-1]:
+                raise
     if not isinstance(opid, str) or not opid:
         raise AppError("wallet did not return an operation id")
     completed = None
