@@ -1,0 +1,78 @@
+name: "ZCanary privacy smoke test"
+description: >-
+  Run a Zcash app against a disposable regtest (Zebra + Zallet via Z3) and check
+  the resulting transaction and captured outputs for privacy regressions.
+author: "unborn7g"
+
+branding:
+  icon: shield
+  color: yellow
+
+inputs:
+  config:
+    description: >-
+      Path to your zcanary TOML config (relative to the workspace). Use
+      $ZCANARY_HOME/scripts/prepare-regtest.sh and
+      $ZCANARY_HOME/scripts/stop-regtest.sh as the network start/stop commands.
+    required: false
+    default: zcanary.toml
+  python-version:
+    description: Python version used to run ZCanary.
+    required: false
+    default: "3.11"
+  upload-reports:
+    description: Upload the JSON and Markdown reports as a workflow artifact.
+    required: false
+    default: "true"
+  report-paths:
+    description: >-
+      Newline-separated report paths to upload. Only list the report files your
+      config writes; do not list raw app logs or wallet data.
+    required: false
+    default: |
+      out/report.json
+      out/report.md
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install ZCanary
+      shell: bash
+      run: python -m pip install "${{ github.action_path }}"
+
+    - name: Check Docker
+      shell: bash
+      run: docker compose version && docker info > /dev/null
+
+    - name: Generate throwaway regtest credentials
+      shell: bash
+      run: |
+        # Random per-run RPC passwords for the disposable regtest only. No wallet seeds or
+        # real keys are involved, and no repository secrets are needed.
+        zebra_pw=$(python -c 'import secrets; print(secrets.token_hex(16))')
+        zallet_pw=$(python -c 'import secrets; print(secrets.token_hex(16))')
+        echo "::add-mask::$zebra_pw"
+        echo "::add-mask::$zallet_pw"
+        {
+          echo "ZCANARY_ZEBRA_PASSWORD=$zebra_pw"
+          echo "ZCANARY_ZALLET_PASSWORD=$zallet_pw"
+          echo "ZCANARY_HOME=${{ github.action_path }}"
+        } >> "$GITHUB_ENV"
+
+    - name: Run ZCanary
+      id: run
+      shell: bash
+      run: zcanary run --config "${{ inputs.config }}"
+
+    - name: Upload reports
+      if: always() && inputs.upload-reports == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: zcanary-reports
+        path: ${{ inputs.report-paths }}
+        if-no-files-found: warn
+        retention-days: 14
