@@ -50,8 +50,8 @@ The beta.3 candidates are Zebra `zfnd/zebra:6.3.0@sha256:52a67e543906c98a0ed1599
 
 | Claim | Status | Verified at runtime? |
 |---|---|---|
-| Unit tests | Latest local result: 79 passed, 8 skipped; non-integration: 79 passed, 8 deselected. | yes — local unit/fixture tests |
-| Docker-backed integration and six apps | Eight integration cases are written; Docker is unavailable in this workspace. | no |
+| Unit tests | Run in CI on every push (`Unit tests` job). | yes — see the CI runs |
+| Docker-backed integration and six apps | Eight integration cases passed on 2026-10-27 in a 4-CPU GitHub Codespace at commit `37b744c` (7 in a full run at `27bbc33`, then the `transparent-fallback` case alone after a fix). The beta.1 default stack was used. | yes — 4-CPU machine, beta.1 default |
 | Cold image-pull and total GitHub Actions time | The workflow records the initial Compose service-image plus pinned `regtest-init` helper pull and integration-job elapsed time. | no — no Actions run/link yet |
 | CI credentials | Private Actions secrets `ZCANARY_ZEBRA_PASSWORD` and `ZCANARY_ZALLET_PASSWORD` are required; values are not in the repository. | no — remote CI has not run |
 
@@ -60,6 +60,6 @@ The CI workflow uploads only sanitized JSON/Markdown reports and timing metadata
 ## Explicitly unverifiable here
 
 - Beta.3 runtime rejection of the exact beta.1 FullPrivacy cross-pool call, and the matching rerun through the new beta.1 reproduction script.
-- Docker image pull/start, clean-runner cold pull duration, and total CI duration.
+- Clean-runner cold pull duration and total CI duration (the CI run page shows the latest numbers).
 - Runtime behavior on architectures other than the historical x86_64 baseline and the GitHub runner's architecture.
 - Public testnet, mainnet, production wallets/funds, NU7, non-configured app logs/artifacts, telemetry outside captured sources, and any guarantee against leaks beyond the explicitly scanned sources.

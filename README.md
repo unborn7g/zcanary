@@ -1,31 +1,102 @@
 # ZCanary
 
-A regtest-only privacy smoke test for Zcash apps. ZCanary starts a disposable Z3 stack, runs an app adapter (`start`, `pay`, `logs`, `stop`), and checks the resulting transaction plus explicitly captured outputs.
+**A privacy smoke test for Zcash apps.** ZCanary starts a throwaway Zcash regtest (Zebra + Zallet, from the Z Foundation's Z3 stack), makes your app send a real shielded payment, and then checks what actually happened: the decoded transaction, the receiving wallet, and the logs and files your app produced. It tells you in a few minutes whether a change quietly made your app less private.
 
-Checks include:
+It is a command-line tool plus a reusable GitHub Action. It is **regtest-only**: nothing here touches mainnet, public testnet, real keys or real funds.
 
-- **C1:** expected network, the node chain and known genesis hash, recipient network prefix, and the app-reported network agree.
-- **C2:** strict receiver-set policy. A Unified Address with a transparent receiver fails this address-policy check; that alone does **not** prove the payment used it.
-- **C3:** the decoded transaction itself has no transparent inputs or outputs.
-- **C4/C4b:** C4 inspects decoded pool bundles; C4b fails on negative shielded valueBalances, value leaving multiple shielded pools, or transparent legs. It reports the derived transaction fee and warns—but does not fail—if it differs from conventional ZIP-317.
-- **MEMO:** the recipient wallet decrypts the unique per-run memo marker.
-- **C6:** unique memo, label, and test-id markers are searched in configured captured logs/artifacts. Reports include labels, counts, and source names only.
+## What it checks
 
-The canary scan is bounded to sources the run actually captures. It is not a guarantee against other leaks, and each report includes a **NOT COVERED** section. Pool behavior is version-specific; see [`docs/version-matrix.md`](docs/version-matrix.md). The default remains the historically runtime-tested Zallet beta.1 baseline until beta.3 passes the complete Docker integration suite.
+| Check | Question it answers |
+|---|---|
+| **C1** | Are the app, the node and the recipient address all on the network the test expects? |
+| **C2** | Does the recipient Unified Address offer a transparent receiver? (An address-policy check. It does not prove the payment used it.) |
+| **C3** | Does the decoded transaction itself have transparent inputs or outputs? |
+| **C4 / C4b** | Which value pools does the transaction touch? Does value cross between shielded pools or leave to a transparent leg, where an observer can see the amount? Also reports the transaction-derived fee and warns if it differs from conventional ZIP-317. |
+| **MEMO** | Can the recipient wallet decrypt the unique per-run memo marker? (Catches apps that silently drop the memo.) |
+| **C6** | Do the unique per-run markers (memo, label, test id) show up anywhere in the logs and files your app was configured to capture? Reports show labels, counts and source names only, never the values. |
+
+Every report ends with a **NOT COVERED** section listing what the run did not and could not look at.
+
+## It catches real problems: the sample apps
+
+`examples/` contains six small apps. One is clean; five each break exactly one thing on purpose. ZCanary's integration suite runs all six against a real regtest and requires the exact set of failures below, no more and no fewer.
+
+| App | What it does | Checks that must fail |
+|---|---|---|
+| `clean-shop` | Fully shielded payment with memo | none |
+| `transparent-fallback` | Pays a transparent receiver | C2, C3, C4b, MEMO |
+| `wrong-network` | Reports a different network than the node | C1 |
+| `log-leaker` | Writes the memo and labels into its log | C6 |
+| `memo-dropper` | Pays shielded but drops the memo | MEMO |
+| `cross-pool-payer` | Moves value between shielded pools | C4, C4b |
+
+**A real-world find.** While building ZCanary, the pool check caught that Zallet `v0.1.0-beta.1` let a call made with privacy policy `FullPrivacy` move value from the Ironwood pool into Sapling, publicly revealing the amount. It reproduced on three separate regtest chains and is kept as a known-bad fixture. Source and release notes suggest `v0.1.0-beta.3` fixes it, but that has **not** been run here. Details, raw evidence and caveats: [`docs/finding-fullprivacy.md`](docs/finding-fullprivacy.md).
+
+## Quick start
+
+You need Docker with Compose v2.24.4 or newer, Python 3.11 or newer, and a machine with **at least 4 CPUs** (see Known limits).
+
+```bash
+python -m pip install -e .
+export ZCANARY_ZEBRA_PASSWORD=$(python3 -c "import secrets;print(secrets.token_hex(16))")
+export ZCANARY_ZALLET_PASSWORD=$(python3 -c "import secrets;print(secrets.token_hex(16))")
+zcanary run --config examples/configs/clean-shop.toml
+```
+
+The passwords are throwaway values for the disposable regtest. They are read from the environment only and are never written to config files or reports.
+
+Reports land next to the config as JSON and Markdown. Exit codes: `0` all checks pass, `1` at least one check failed, `2` a check could not run, `3` the run itself errored.
+
+### In GitHub Actions
+
+```yaml
+jobs:
+  privacy:
+    runs-on: ubuntu-latest   # public repositories get 4 vCPUs; private ones need a larger runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: unborn7g/zcanary@main
+        with:
+          config: zcanary.toml
+          report-paths: |
+            out/report.json
+            out/report.md
+```
+
+The Action installs ZCanary, generates throwaway regtest passwords itself (no repository secrets needed), runs your config and uploads the reports. This repository runs it against the bundled clean app in its own CI. In your own config, use `$ZCANARY_HOME/scripts/prepare-regtest.sh` and `$ZCANARY_HOME/scripts/stop-regtest.sh` as the network start and stop commands, and `out/context.json` as the context file. The self-test uses the bundled `examples/configs/clean-shop.toml` instead.
+
+## How to point it at your app
+
+An app is described by a small adapter in `zcanary.toml`: a `pay` command (and optional `start`, `logs`, `stop`). ZCanary gives the command the recipient address, a unique memo and canary markers through environment variables, and reads back the transaction id your app reports. See [`examples/common_pay.py`](examples/common_pay.py) for a complete, working adapter.
+
+## What ZCanary does NOT test
+
+Be careful what a green report means. It is a smoke test, not an audit.
+
+- Network-level metadata: timing, IP addresses and anything an observer outside your captured outputs can see.
+- Databases, analytics, telemetry, crash dumps and logs that were not explicitly configured for capture. The canary scan covers only what the run captured.
+- Mainnet or production behaviour, real funds and real credentials. Regtest only.
+- Wallet and node versions beyond those listed in [`docs/version-matrix.md`](docs/version-matrix.md). Behaviour is version-specific.
+- Future transaction fields and pools. Unknown fields make the checks fail closed, but those formats are unverified.
+- Miner fee policy, and hidden transparent input values. The fee is derived from the transaction and reported, not certified.
+- NU7-era behaviour and public testnet.
+
+## Known limits
+
+- **Needs a 4-CPU machine.** On a 2-CPU GitHub runner, Zallet's wallet-database RPCs stopped answering in our runs, with every Zallet beta version tried. The cause is not confirmed; our leading guess is Zallet's database connection pool filling up on small machines. The full suite passes on 4 CPUs. Notes: [`docs/ci-runner-note.md`](docs/ci-runner-note.md).
+- **Default Zallet is `v0.1.0-beta.1`**, kept as the runtime-tested baseline. `v0.1.0-beta.3` support is wired in but its runtime behaviour was not verified here.
+- Pinned versions: Z3 at commit `e84ce9fd`; Zebra `6.2.3` and Zallet `v0.1.0-beta.1` by image digest.
+
+## What is new here
+
+ZCanary was written for the Zecathon (the first commit is dated 2026-10-13; the full history is in this repository): the CLI and its adapter model, the seven checks, the per-run canary scanner and report format, the six sample apps, the transaction pool analysis, the test harness and CI, and the GitHub Action. It builds on existing open-source pieces that it does not reimplement: the Z Foundation's [Z3](https://github.com/ZcashFoundation/z3) stack, [Zebra](https://github.com/ZcashFoundation/zebra) and [Zallet](https://github.com/zcash/zallet), plus Docker.
+
+## How it was built
+
+I built ZCanary with AI assistance. One AI coding tool wrote much of the code, and Claude (Anthropic) helped with planning, code review, debugging and documentation. I ran the stack, tested it on real machines, and decided what shipped. The first end-to-end runs needed several fixes that only appeared on a real regtest (a check that ran after the network had been shut down, a wallet-readiness check that was too strict, Zebra waiting on DNS, a stale wallet config, and a mining timeout); they are all fixed and covered by the integration suite.
 
 ## Safety
 
-Use only the included disposable **regtest** configuration. Do not point the harness at mainnet, public testnet, production wallets, real keys, or real funds. The stack uses isolated regtest wallet data; never paste RPC passwords, seeds, or keys into chat or reports. Password values are read from environment variables and are not stored in TOML. The default GitHub Actions integration job expects private repository secrets named `ZCANARY_ZEBRA_PASSWORD` and `ZCANARY_ZALLET_PASSWORD`; it fails closed if they are absent.
-
-## Run locally
-
-```bash
-python -m pip install -e '.[dev]'
-# Set ZCANARY_ZEBRA_PASSWORD and ZCANARY_ZALLET_PASSWORD in your shell first.
-# Do not place their values in this repository or on the command line.
-zcanary run --config zcanary.toml
-```
-
-The six sample apps and isolated configs are under `examples/`. The normal `pytest` command runs unit tests; Docker-backed tests are selected with `ZCANARY_RUN_INTEGRATION=1 python -m pytest -m integration` and require Docker plus the environment-only test RPC credentials.
+Use only the included disposable regtest configuration. Never paste RPC passwords, seeds or keys into chat, issues or reports.
 
 License: MIT

@@ -61,6 +61,7 @@ runs:
           echo "ZCANARY_ZEBRA_PASSWORD=$zebra_pw"
           echo "ZCANARY_ZALLET_PASSWORD=$zallet_pw"
           echo "ZCANARY_HOME=${{ github.action_path }}"
+          echo "OUT=${{ github.workspace }}/out"
         } >> "$GITHUB_ENV"
 
     - name: Run ZCanary

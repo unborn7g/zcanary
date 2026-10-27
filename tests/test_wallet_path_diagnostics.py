@@ -1115,20 +1115,18 @@ def test_diagnose_workflow_is_manual_bounded_matrix_and_always_uploads_diagnosti
     assert 'allow_insecure_remote_bind = true' in spike
 
 
-def test_ci_runner_note_explains_the_db_pool_issue_and_scoped_workaround():
+def test_ci_runner_note_states_the_observation_and_marks_the_cause_unconfirmed():
     path = ROOT / "docs" / "ci-runner-note.md"
     assert path.is_file()
     note = path.read_text(encoding="utf-8").lower()
     for phrase in (
-        "four long-lived sync tasks",
-        "physical cores × 4",
-        "wallet database",
-        "auto",
-        "on",
-        "off",
-        "8-core",
-        "disposable regtest",
-        "not a production fix",
+        "2-cpu",
+        "4-cpu",
+        "wallet-database",
+        "hypothesis",
+        "not confirmed",
+        "what did not help",
+        "zcanary_zallet_physical_cpu_workaround",
     ):
         assert phrase in note
     assert "zcanary_zebra_password=" not in note

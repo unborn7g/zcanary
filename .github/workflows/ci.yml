@@ -92,3 +92,18 @@ jobs:
           path: out/diagnostics/wallet-startup.log
           if-no-files-found: ignore
           retention-days: 14
+
+  action-selftest:
+    name: GitHub Action self-test (clean-shop)
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ZCanary through the reusable Action
+        uses: ./
+        with:
+          config: examples/configs/clean-shop.toml
+          report-paths: |
+            out/reports/clean-shop.json
+            out/reports/clean-shop.md

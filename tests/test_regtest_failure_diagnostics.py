@@ -500,4 +500,4 @@ def test_integration_assertion_diagnostic_redacts_and_limits_output():
 def test_ci_jobs_use_pinned_ubuntu_2404_runner():
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     runners = re.findall(r"^\s*runs-on:\s*(\S+)\s*$", workflow, flags=re.MULTILINE)
-    assert runners == ["ubuntu-24.04", "ubuntu-24.04"]
+    assert runners == ["ubuntu-24.04", "ubuntu-24.04", "ubuntu-24.04"]
