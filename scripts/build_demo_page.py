@@ -33,6 +33,13 @@ CHECK_MEANING = [
     ("C6 Logs", "Did our secret markers show up anywhere in the logs or files the app wrote?"),
 ]
 
+STEPS = [
+    ("Start", "A practice Zcash network spins up on your machine. No real money, seeds or keys."),
+    ("Pay", "Your app makes a payment with secret markers attached."),
+    ("Inspect", "ZCanary decodes the real transaction and reads the receiving wallet and your app's logs."),
+    ("Report", "You get what passed, what failed and what was never tested."),
+]
+
 # Order, plain-language story and what to look for, per sample app.
 APPS = [
     {
@@ -79,49 +86,131 @@ APPS = [
     },
 ]
 
+FONT_LINK = (
+    "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800"
+    "&family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+)
+
 CSS = """
-:root{--bg:#f6f4ee;--surface:#fff;--ink:#1c1b19;--muted:#5d5a52;--line:#ddd8cb;--accent:#1f5c4a;
---pass:#1b6e3c;--pass-bg:#e3f3e8;--fail:#a4262c;--fail-bg:#fbe7e7;--skip:#6b665a;--skip-bg:#ebe8de;--code:#efece3}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#15150f;--surface:#1f1e17;--ink:#f1eee4;--muted:#b4afa0;--line:#38362b;--accent:#7fd1b0;
---pass:#7fd49a;--pass-bg:#173424;--fail:#ff9a9a;--fail-bg:#3b1b1b;--skip:#b4afa0;--skip-bg:#2b2a21;--code:#2a291f}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-.wrap{max-width:980px;margin:0 auto;padding:0 16px 64px}
-header{padding:48px 0 24px}
-h1{font-size:clamp(2rem,5vw,3rem);line-height:1.1;margin:0 0 12px;letter-spacing:-.02em}
-.lead{font-size:1.2rem;color:var(--muted);max-width:42em;margin:0 0 8px}
-.eyebrow{font-weight:600;color:var(--accent);letter-spacing:.06em;text-transform:uppercase;font-size:.8rem;margin:0 0 8px}
-.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:24px 0;padding:0;list-style:none;counter-reset:s}
-.steps li{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;counter-increment:s}
-.steps li::before{content:counter(s);display:inline-grid;place-items:center;width:1.6em;height:1.6em;border-radius:50%;background:var(--accent);color:var(--bg);font-weight:700;font-size:.85rem;margin-right:8px}
-.strip{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0 0 28px}
-.strip b{font-size:1.1rem}.strip a{color:var(--accent)}
-h2{font-size:1.5rem;margin:40px 0 12px;letter-spacing:-.01em}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 18px 14px}
-.card h3{margin:0;font-size:1.15rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:6px}
-.badge{font-weight:700;font-size:.8rem;border-radius:999px;padding:3px 10px;white-space:nowrap}
-.badge.pass{color:var(--pass);background:var(--pass-bg)}.badge.fail{color:var(--fail);background:var(--fail-bg)}
-.story{margin:6px 0 12px;color:var(--muted)}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;padding:0;list-style:none}
-.chip{font-size:.78rem;font-weight:600;border-radius:8px;padding:3px 8px;border:1px solid transparent}
-.chip.pass{color:var(--pass);background:var(--pass-bg)}.chip.fail{color:var(--fail);background:var(--fail-bg)}.chip.not_run{color:var(--skip);background:var(--skip-bg)}
-.found{margin:0 0 10px}.found strong{display:block;font-size:.8rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
-.ok{font-size:.9rem;color:var(--pass);margin:0 0 8px}
-details{border-top:1px solid var(--line);padding-top:8px;margin-top:6px}
-summary{cursor:pointer;color:var(--muted);font-size:.9rem}
-.raw{margin:8px 0 0;padding:0;list-style:none;font-size:.85rem}
-.raw li{padding:4px 0;border-bottom:1px dashed var(--line)}
-.raw code{background:var(--code);padding:1px 6px;border-radius:6px;font-size:.8rem}
-dl.meaning{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}
-dl.meaning dt{font-weight:600}dl.meaning dd{margin:0;color:var(--muted)}
-@media (max-width:560px){dl.meaning{grid-template-columns:1fr}dl.meaning dt{margin-top:8px}}
-.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px}
-.panel ul{margin:8px 0 0;padding-left:1.2em}.panel li{margin:4px 0}
-footer{margin-top:40px;color:var(--muted);font-size:.9rem}footer a,.panel a{color:var(--accent)}
-a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+:root,:root[data-theme=dark]{color-scheme:dark;
+--font-display:"Bricolage Grotesque",-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;
+--font-sans:"Instrument Sans",-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
+--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+--bg:#040B08;--bg-elevated:#07140E;--panel:rgba(9,22,16,.88);--well:rgba(4,12,9,.92);--well-hover:rgba(14,33,24,.95);
+--ink:#F0FDF6;--muted:#B5D1C4;--rule:rgba(42,245,152,.22);--rule-strong:rgba(42,245,152,.42);
+--mint:#2AF598;--mint-2:#10D47E;--mint-glow:rgba(42,245,152,.26);--mint-soft:rgba(42,245,152,.14);--mint-text:#6FF9B8;--on-mint:#03140B;
+--amber:#FF7849;--amber-soft:rgba(255,120,73,.16);--amber-border:rgba(255,120,73,.44);--amber-text:#FFBBA3;
+--glass-header:rgba(4,11,8,.86);
+--card-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 24px 48px -20px rgba(0,0,0,.85),0 0 36px -12px rgba(42,245,152,.08)}
+:root[data-theme=light]{color-scheme:light;
+--bg:#F2F7F4;--bg-elevated:#E7F0EB;--panel:rgba(255,255,255,.94);--well:#ECF3EF;--well-hover:#E0ECE5;
+--ink:#071710;--muted:#334B40;--rule:rgba(16,140,88,.22);--rule-strong:rgba(16,140,88,.42);
+--mint:#12B86E;--mint-2:#0D9F5E;--mint-glow:rgba(18,184,110,.2);--mint-soft:rgba(18,184,110,.12);--mint-text:#065F38;--on-mint:#fff;
+--amber:#D9481E;--amber-soft:#FFEDD5;--amber-border:rgba(217,72,30,.4);--amber-text:#8C270B;
+--glass-header:rgba(242,247,244,.88);
+--card-shadow:0 1px 0 rgba(255,255,255,.9) inset,0 20px 40px -24px rgba(7,23,16,.14),0 2px 8px rgba(7,23,16,.04)}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background-color:var(--bg);
+background-image:radial-gradient(60% 45% at 78% 6%,var(--mint-glow),transparent 70%),radial-gradient(45% 35% at 15% 18%,rgba(16,212,126,.08),transparent 70%),linear-gradient(180deg,var(--bg-elevated) 0%,var(--bg) 100%);
+background-attachment:fixed;color:var(--ink);font-family:var(--font-sans);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:var(--mint-text)}
+:focus-visible{outline:2px solid var(--mint);outline-offset:2px}
+.hdr{position:sticky;top:0;z-index:20;background:var(--glass-header);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--rule)}
+.hdr-in{max-width:1200px;margin:0 auto;padding:12px 24px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:800;font-size:20px;letter-spacing:-.02em;color:var(--ink);text-decoration:none}
+.logo{width:30px;height:30px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,var(--mint),var(--mint-2));color:var(--on-mint);font-size:16px}
+.hdr-r{display:flex;align-items:center;gap:10px}
+.btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;font-family:var(--font-sans);cursor:pointer}
+.btn-mint{min-height:48px;padding:0 24px;background:linear-gradient(135deg,var(--mint) 0%,var(--mint-2) 100%);color:var(--on-mint);border:1px solid rgba(255,255,255,.22);border-radius:999px;font-weight:700;box-shadow:0 10px 26px -8px var(--mint-glow);transition:transform .2s cubic-bezier(.22,1,.36,1),filter .2s ease}
+.btn-mint:hover{filter:brightness(1.06);transform:translateY(-1px)}.btn-mint:active{transform:scale(.97)}
+.btn-ghost{min-height:44px;padding:0 16px;border:1px solid var(--rule);background:var(--well);color:var(--ink);border-radius:999px;font-weight:600}
+.btn-ghost:hover{border-color:var(--rule-strong);background:var(--well-hover)}
+.theme{position:relative;display:inline-flex;align-items:center;padding:4px;border-radius:999px;border:1px solid var(--rule);background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.015)),var(--well);backdrop-filter:blur(20px);box-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 10px 26px -14px rgba(0,0,0,.7)}
+.theme-thumb{position:absolute;top:4px;left:4px;width:34px;height:26px;border-radius:999px;background:linear-gradient(180deg,var(--mint),var(--mint-2));box-shadow:0 0 18px var(--mint-glow),inset 0 1px 0 rgba(255,255,255,.35);transition:transform .34s cubic-bezier(.22,1,.36,1);z-index:1}
+.theme[data-mode=dark] .theme-thumb{transform:translateX(34px)}
+.theme-opt{position:relative;z-index:2;width:34px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:999px;background:transparent;color:var(--muted);cursor:pointer;transition:color .25s ease}
+.theme-opt[aria-pressed=true]{color:var(--on-mint)}
+.hero{position:relative;overflow:hidden;padding:84px 24px 8px;text-align:center}
+.hero::before{content:"";position:absolute;top:-220px;left:50%;transform:translateX(-50%);width:1200px;height:640px;background:radial-gradient(50% 50% at 50% 50%,var(--mint-glow),transparent 70%);filter:blur(18px);opacity:.85;pointer-events:none}
+.hero-in{position:relative;max-width:1160px;margin:0 auto}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:6px 13px;border-radius:999px;border:1px solid var(--rule-strong);background:var(--mint-soft);color:var(--mint-text);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+.eyebrow-dot{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 10px var(--mint)}
+h1{font-family:var(--font-display);font-size:clamp(42px,7vw,86px);font-weight:800;letter-spacing:-.045em;line-height:.96;margin:22px 0 0}
+h1 em,.cta-title em{font-style:italic;color:var(--mint)}
+.hero-sub{max-width:640px;margin:22px auto 0;font-size:17px;line-height:1.6;color:var(--muted)}
+.hero-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+.arc{position:relative;height:200px;margin:30px auto 0;max-width:1120px;pointer-events:none}
+.arc-ring{position:absolute;left:50%;bottom:-170px;transform:translateX(-50%);width:min(1040px,96%);height:320px;border-radius:50%;border-top:1px solid var(--rule-strong);box-shadow:0 -26px 70px -18px var(--mint-glow),inset 0 26px 70px -30px var(--mint-glow);animation:arcRing 9s ease-in-out infinite alternate}
+.arc-glow{position:absolute;left:50%;bottom:-110px;transform:translateX(-50%);width:min(760px,84%);height:240px;background:radial-gradient(50% 50% at 50% 50%,var(--mint-glow),transparent 72%);filter:blur(26px);animation:arcBreathe 9s ease-in-out infinite alternate}
+.arc-sweep{position:absolute;left:50%;bottom:-170px;transform:translateX(-50%);width:min(1040px,96%);height:320px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 0 54%,transparent 54%);mask-image:linear-gradient(180deg,#000 0 54%,transparent 54%)}
+.arc-trace{fill:none;stroke:var(--mint);stroke-width:1.6;stroke-linecap:round;stroke-dasharray:300 2289;animation:arcSweep 11s linear infinite;filter:drop-shadow(0 0 6px var(--mint)) drop-shadow(0 0 20px var(--mint-glow))}
+.arc-trace-2{stroke-dasharray:120 2469;opacity:.55;animation-duration:17s;animation-delay:-6s}
+@keyframes arcSweep{from{stroke-dashoffset:0}to{stroke-dashoffset:-2589}}
+@keyframes arcRing{from{opacity:.55}to{opacity:1}}
+@keyframes arcBreathe{from{opacity:.5;transform:translateX(-50%) scale(.94)}to{opacity:1;transform:translateX(-50%) scale(1.06)}}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px 72px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0 auto;border:1px solid var(--rule);border-radius:20px;background:var(--panel);backdrop-filter:blur(18px);box-shadow:var(--card-shadow);overflow:hidden;position:relative}
+.stat{padding:18px 22px;text-align:left;border-left:1px solid var(--rule)}.stat:first-child{border-left:0}
+.stat b{display:block;font-family:var(--font-display);font-size:28px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.stat span{display:block;margin-top:4px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.stat b.warn{color:var(--amber-text)}
+.sec-head{max-width:740px;margin:84px 0 24px}
+h2{margin:16px 0 0;font-family:var(--font-display);font-size:clamp(30px,4vw,50px);font-weight:800;line-height:1.02;letter-spacing:-.04em}
+.sub{margin:14px 0 0;font-size:16px;line-height:1.6;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:22px}
+.card{background:var(--panel);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid var(--rule);border-radius:24px;box-shadow:var(--card-shadow);padding:24px 26px;display:flex;flex-direction:column;gap:14px}
+.card.caught{border-color:var(--amber-border)}
+.card-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.card h3{margin:0;font-family:var(--font-display);font-size:21px;font-weight:700;letter-spacing:-.02em}
+.badge{font-size:11px;font-weight:700;letter-spacing:.12em;border-radius:999px;padding:5px 12px;white-space:nowrap}
+.badge.pass{color:var(--mint-text);background:var(--mint-soft);border:1px solid var(--rule-strong)}
+.badge.fail{color:var(--amber-text);background:var(--amber-soft);border:1px solid var(--amber-border)}
+.story{margin:0;color:var(--muted);font-size:15px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
+.chip{font-family:var(--font-mono);font-size:12px;border-radius:999px;padding:3px 10px;border:1px solid var(--rule);background:var(--well);color:var(--muted)}
+.chip.pass{color:var(--mint-text);border-color:var(--rule-strong)}
+.chip.fail{color:var(--amber-text);background:var(--amber-soft);border-color:var(--amber-border);font-weight:600}
+.chip.not_run{opacity:.7}
+.lbl{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 4px}
+.found{margin:0;font-size:15.5px}
+.verify{margin:0;font-size:13.5px;color:var(--mint-text)}
+details{border-top:1px solid var(--rule);padding-top:10px}
+summary{cursor:pointer;color:var(--muted);font-size:14px;font-weight:600}
+.raw{margin:10px 0 0;padding:0;list-style:none;font-family:var(--font-mono);font-size:12.5px;color:var(--muted)}
+.raw li{padding:6px 0;border-bottom:1px dashed var(--rule);overflow-wrap:anywhere}
+.raw code{color:var(--mint-text)}
+.files{margin:10px 0 0;font-size:14px}
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.feature{padding:24px 22px;border-radius:20px;border:1px solid var(--rule);background:var(--panel);box-shadow:var(--card-shadow)}
+.feature-num{font-family:var(--font-display);font-size:12px;font-weight:700;letter-spacing:.18em;color:var(--mint)}
+.feature-title{margin:14px 0 0;font-family:var(--font-display);font-size:20px;font-weight:700;letter-spacing:-.02em}
+.feature-body{margin:8px 0 0;font-size:14.5px;line-height:1.55;color:var(--muted)}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px}
+.step{padding:20px 2px 0;border-top:1px solid var(--rule-strong)}
+.step-num{font-family:var(--font-display);font-size:40px;font-weight:800;letter-spacing:-.04em;color:var(--mint)}
+.step-title{margin:8px 0 0;font-family:var(--font-display);font-size:19px;font-weight:700}
+.step p{margin:6px 0 0;color:var(--muted);font-size:15px}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:24px;box-shadow:var(--card-shadow);padding:24px 26px}
+.panel p{margin:0 0 12px}.panel ul{margin:8px 0 0;padding-left:1.2em;color:var(--muted)}.panel li{margin:6px 0}
+code{font-family:var(--font-mono);font-size:.9em}
+.cta{margin:88px 0 0;padding:64px 32px;text-align:center;border-radius:28px;border:1px solid var(--rule-strong);position:relative;overflow:hidden;background:radial-gradient(80% 120% at 50% 0%,var(--mint-soft),transparent 62%),var(--panel);box-shadow:var(--card-shadow)}
+.cta-title{margin:0;font-family:var(--font-display);font-size:clamp(30px,4.4vw,54px);font-weight:800;line-height:1.02;letter-spacing:-.04em}
+.cta .hero-cta{margin-top:26px}
+footer{margin-top:40px;color:var(--muted);font-size:14px}
+@media (max-width:820px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat:nth-child(3){border-left:0}.stat:nth-child(n+3){border-top:1px solid var(--rule)}}
+@media (prefers-reduced-motion:reduce){.arc-ring,.arc-glow,.arc-trace{animation:none}.theme-thumb{transition:none}.btn-mint{transition:none}}
 """
 
+THEME_INIT = "(function(){try{var m=localStorage.getItem('zcanary-theme');document.documentElement.setAttribute('data-theme',(m==='light'||m==='dark')?m:'dark');}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();"
+THEME_JS = """(function(){var r=document.documentElement,sw=document.querySelector('.theme');if(!sw)return;
+function set(m){r.setAttribute('data-theme',m);sw.setAttribute('data-mode',m);
+sw.querySelectorAll('.theme-opt').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.mode===m));});
+try{localStorage.setItem('zcanary-theme',m);}catch(e){}}
+sw.querySelectorAll('.theme-opt').forEach(function(b){b.addEventListener('click',function(){set(b.dataset.mode);});});
+set(r.getAttribute('data-theme')==='light'?'light':'dark');})();"""
+
+SUN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
+MOON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
 
 def esc(text: object) -> str:
     return html.escape(str(text), quote=True)
@@ -148,26 +237,25 @@ def render_card(app: dict, report: dict) -> str:
     matches = sorted(failed) == sorted(app["expected"])
     badge = '<span class="badge pass">PASS</span>' if passed_overall else '<span class="badge fail">CAUGHT</span>'
     chips = "".join(
-        f'<li class="chip {esc(checks[c]["status"])}">{esc(c)} {esc(CHECK_LABEL[c])}: {esc(checks[c]["status"].replace("_", " ").upper())}</li>'
+        f'<li class="chip {esc(checks[c]["status"])}">{esc(c)} {esc(CHECK_LABEL[c])} {esc(checks[c]["status"].replace("_", " ").upper())}</li>'
         for c in CHECK_ORDER
         if c in checks
     )
     if app["expected"]:
-        expect_text = "Designed to fail: " + ", ".join(app["expected"]) + ". ZCanary failed exactly these" if matches else "Designed to fail: " + ", ".join(app["expected"])
+        expect_text = "Built to fail " + ", ".join(app["expected"]) + (". ZCanary failed exactly these." if matches else ".")
     else:
-        expect_text = "Designed to pass everything. It did" if matches else "Designed to pass everything"
-    raw = "".join(
-        f'<li><code>{esc(c)}</code> {esc(checks[c]["message"])}</li>' for c in CHECK_ORDER if c in checks
-    )
+        expect_text = "Built to pass everything." + (" It did." if matches else "")
+    raw = "".join(f'<li><code>{esc(c)}</code> {esc(checks[c]["message"])}</li>' for c in CHECK_ORDER if c in checks)
+    cls = "card" if passed_overall else "card caught"
     return f"""
-<article class="card" id="{esc(app['id'])}">
-  <div class="top"><h3>{esc(app['title'])}</h3>{badge}</div>
+<article class="{cls}" id="{esc(app['id'])}">
+  <div class="card-top"><h3>{esc(app['title'])}</h3>{badge}</div>
   <p class="story">{esc(app['story'])}</p>
   <ul class="chips" aria-label="Check results">{chips}</ul>
-  <p class="found"><strong>What ZCanary found</strong>{esc(app['found'])}</p>
-  <p class="ok">{'&#10003; ' if matches else ''}{esc(expect_text)}.</p>
+  <div><p class="lbl">What ZCanary found</p><p class="found">{esc(app['found'])}</p></div>
+  <p class="verify">{'&#10003; ' if matches else ''}{esc(expect_text)}</p>
   <details><summary>Exact report lines</summary><ul class="raw">{raw}</ul>
-  <p class="story">Report files: <a href="reports/{esc(app['id'])}.md">Markdown</a>, <a href="reports/{esc(app['id'])}.json">JSON</a>.</p></details>
+  <p class="files">Full report: <a href="reports/{esc(app['id'])}.md">Markdown</a> &middot; <a href="reports/{esc(app['id'])}.json">JSON</a></p></details>
 </article>"""
 
 
@@ -176,62 +264,96 @@ def build(reports_dir: Path, run_url: str, commit: str) -> str:
     cards = "".join(render_card(app, reports[app["id"]]) for app in APPS)
     caught = sum(1 for app in APPS if reports[app["id"]]["overall"] != "pass")
     passed = len(APPS) - caught
-    meaning = "".join(f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in CHECK_MEANING)
+    n_checks = len(reports["clean-shop"]["checks"])
+    features = "".join(
+        f'<div class="feature"><div class="feature-num">{i:02d}</div><h3 class="feature-title">{esc(k)}</h3><p class="feature-body">{esc(v)}</p></div>'
+        for i, (k, v) in enumerate(CHECK_MEANING, 1)
+    )
+    steps = "".join(
+        f'<div class="step"><div class="step-num">{i}</div><h3 class="step-title">{esc(t)}</h3><p>{esc(b)}</p></div>'
+        for i, (t, b) in enumerate(STEPS, 1)
+    )
     not_covered = "".join(f"<li>{esc(item)}</li>" for item in reports["clean-shop"]["not_covered"])
-    run_link = f'<a href="{esc(run_url)}">CI run (commit {esc(commit)})</a>' if run_url else "CI run"
+    run_href = esc(run_url) if run_url else "https://github.com/unborn7g/zcanary/actions"
+    repo = "https://github.com/unborn7g/zcanary"
     return f"""<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZCanary demo</title>
 <meta name="description" content="Real ZCanary reports for six sample Zcash apps: one clean, five broken on purpose.">
+<script>{THEME_INIT}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{FONT_LINK}">
 <style>{CSS}</style>
 </head>
 <body>
-<div class="wrap">
-<header>
-  <p class="eyebrow">ZCanary &middot; privacy smoke test for Zcash apps</p>
-  <h1>Your app says &ldquo;private payment.&rdquo; Did it really do that?</h1>
-  <p class="lead">ZCanary checks the receipt, not the sign. It builds a throwaway Zcash network, makes your app pay with a secret marker attached, and inspects what actually happened.</p>
-  <ol class="steps">
-    <li><b>Start</b> a practice network on your machine. No real money, seeds or keys.</li>
-    <li><b>Pay</b> through your app, with a secret marker in the payment.</li>
-    <li><b>Inspect</b> the real transaction, the receiving wallet and your app's logs.</li>
-    <li><b>Report</b> what passed, what failed, and what was never tested.</li>
-  </ol>
-  <div class="strip">
-    <span><b>{len(APPS)}</b> sample apps</span>
-    <span><b>{passed}</b> clean, <b>{caught}</b> caught</span>
-    <span>Real results from the {run_link}</span>
+<header class="hdr"><div class="hdr-in">
+  <a class="brand" href="#top"><span class="logo" aria-hidden="true">&#9670;</span>ZCanary</a>
+  <div class="hdr-r">
+    <a class="btn btn-ghost" href="{repo}">GitHub</a>
+    <div class="theme" role="group" aria-label="Appearance" data-mode="dark"><span class="theme-thumb" aria-hidden="true"></span>
+      <button type="button" class="theme-opt" data-mode="light" aria-label="Light theme" aria-pressed="false">{SUN}</button>
+      <button type="button" class="theme-opt" data-mode="dark" aria-label="Dark theme" aria-pressed="true">{MOON}</button>
+    </div>
   </div>
-</header>
+</div></header>
+<main id="top">
+<section class="hero"><div class="hero-in">
+  <span class="eyebrow"><span class="eyebrow-dot"></span>Privacy smoke test</span>
+  <h1>Your app says &ldquo;private.&rdquo;<br><em>Did it stay private?</em></h1>
+  <p class="hero-sub">ZCanary pays through your app on a throwaway Zcash network, then checks the real transaction, the receiving wallet and your logs.</p>
+  <div class="hero-cta"><a class="btn btn-mint" href="#verdicts">See the six verdicts</a><a class="btn btn-ghost" href="{repo}">View the code</a></div>
+  <div class="arc" aria-hidden="true"><div class="arc-glow"></div><div class="arc-ring"></div>
+    <svg class="arc-sweep" viewBox="0 0 1040 320" preserveAspectRatio="none"><ellipse class="arc-trace" cx="520" cy="160" rx="518" ry="158"/><ellipse class="arc-trace arc-trace-2" cx="520" cy="160" rx="518" ry="158"/></svg></div>
+</div></section>
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><b>{len(APPS)}</b><span>Sample apps</span></div>
+    <div class="stat"><b>{passed}</b><span>Clean</span></div>
+    <div class="stat"><b class="warn">{caught}</b><span>Caught</span></div>
+    <div class="stat"><b>{n_checks}</b><span>Checks per run</span></div>
+  </div>
 
-<h2>Six apps, six verdicts</h2>
-<p class="lead" style="font-size:1rem">One app is correct. Five are broken on purpose, each in one specific way. ZCanary has to fail exactly the right checks for each one, and the project&rsquo;s test suite requires it.</p>
-<div class="grid">{cards}
+  <div class="sec-head" id="verdicts"><span class="eyebrow"><span class="eyebrow-dot"></span>Six verdicts</span>
+    <h2>One clean app. Five that leak.</h2>
+    <p class="sub">Each broken app leaks in one specific way. ZCanary has to fail exactly the right checks, and the test suite requires it. These are the real reports from <a href="{run_href}">CI</a> (commit {esc(commit)}).</p></div>
+  <div class="grid">{cards}
+  </div>
+
+  <div class="sec-head"><span class="eyebrow"><span class="eyebrow-dot"></span>The checks</span>
+    <h2>What each check asks.</h2>
+    <p class="sub">Plain questions, answered from the real transaction.</p></div>
+  <div class="features">{features}</div>
+
+  <div class="sec-head"><span class="eyebrow"><span class="eyebrow-dot"></span>Four steps</span>
+    <h2>How a run works.</h2></div>
+  <div class="steps">{steps}</div>
+
+  <div class="sec-head"><span class="eyebrow"><span class="eyebrow-dot"></span>A real find</span>
+    <h2>It caught a Zallet bug.</h2></div>
+  <div class="panel">
+    <p>While building ZCanary, the pool check caught something real. Zallet <code>v0.1.0-beta.1</code> let a payment sent with the <code>FullPrivacy</code> setting move value from one shielded pool into another, which made the amount publicly visible. It reproduced on three separate test chains. The source and release notes suggest <code>v0.1.0-beta.3</code> fixes it, but that was not run here.</p>
+    <p><a href="{repo}/blob/main/docs/finding-fullprivacy.md">Read the evidence and caveats</a></p>
+  </div>
+
+  <div class="sec-head"><span class="eyebrow"><span class="eyebrow-dot"></span>Honest limits</span>
+    <h2>What it does not test.</h2>
+    <p class="sub">A green report is a smoke test, not an audit. Every report ends with this list.</p></div>
+  <div class="panel"><ul>{not_covered}</ul></div>
+
+  <section class="cta">
+    <h2 class="cta-title">Run it on your app.<br><em>Before your users do.</em></h2>
+    <div class="hero-cta"><a class="btn btn-mint" href="{repo}">Get ZCanary</a><a class="btn btn-ghost" href="{repo}#readme">Read the README</a></div>
+  </section>
+  <footer>
+    <p>Open source, MIT license. Regtest only: nothing here touches mainnet, public testnet, real keys or real funds.</p>
+    <p>Generated by <code>scripts/build_demo_page.py</code> from the sanitized reports in <code>docs/demo/reports/</code>.</p>
+  </footer>
 </div>
-
-<h2>What the checks mean</h2>
-<div class="panel"><dl class="meaning">{meaning}</dl></div>
-
-<h2>A real find</h2>
-<div class="panel">
-  <p>While building ZCanary, the pool check caught something real. Zallet <code>v0.1.0-beta.1</code> let a payment sent with the <code>FullPrivacy</code> setting move value from one shielded pool into another, which made the amount publicly visible. It reproduced on three separate test chains. The source and release notes suggest <code>v0.1.0-beta.3</code> fixes it, but that was not run here.</p>
-  <p><a href="https://github.com/unborn7g/zcanary/blob/main/docs/finding-fullprivacy.md">Read the evidence and caveats</a></p>
-</div>
-
-<h2>What ZCanary does not test</h2>
-<div class="panel">
-  <p>A green report is a smoke test, not an audit. Every report ends with this list.</p>
-  <ul>{not_covered}</ul>
-</div>
-
-<footer>
-  <p>Open source under the MIT license. <a href="https://github.com/unborn7g/zcanary">Source code and README</a>. Regtest only: nothing here touches mainnet, public testnet, real keys or real funds.</p>
-  <p>This page was generated by <code>scripts/build_demo_page.py</code> from the sanitized reports in <code>docs/demo/reports/</code>.</p>
-</footer>
-</div>
+</main>
+<script>{THEME_JS}</script>
 </body>
 </html>
 """
