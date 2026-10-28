@@ -1,0 +1,213 @@
+{
+  "canary_scan_scope": "captured app command output, configured app logs, configured scan files, and generated reports only",
+  "checks": [
+    {
+      "evidence": {
+        "app_genesis_hash": "029f11d80ef9765602235e1bc9727e3eb6ba20839319f761fee920d63401e327",
+        "app_genesis_network": "regtest",
+        "app_network": "regtest",
+        "config": "regtest",
+        "genesis_hash": "029f11d80ef9765602235e1bc9727e3eb6ba20839319f761fee920d63401e327",
+        "genesis_network": "regtest",
+        "node_chain": "test",
+        "node_implies": [
+          "regtest",
+          "testnet"
+        ],
+        "recipient": "uregtest1rsa\u2026y4k904",
+        "recipient_kind": "unified",
+        "recipient_network": "regtest"
+      },
+      "fix": "",
+      "id": "C1",
+      "message": "node chain 'test', node/app genesis hashes, app network, recipient prefix, and config all agree on regtest",
+      "status": "pass"
+    },
+    {
+      "evidence": {
+        "finding_scope": "address-policy only; does not establish which receiver the transaction used",
+        "kind": "unified",
+        "receivers": [
+          "orchard",
+          "p2pkh",
+          "sapling"
+        ],
+        "recipient": "uregtest1rsa\u2026y4k904"
+      },
+      "fix": "For a strict receiver-set policy, derive the UA with shielded receivers only, e.g. z_getaddressforaccount <account> [\"orchard\",\"sapling\"].",
+      "id": "C2",
+      "message": "address-policy failure: unified address offers transparent receiver(s): ['p2pkh']; this does not prove the payment used one (see C3 transaction legs)",
+      "status": "fail"
+    },
+    {
+      "evidence": {
+        "coinbase": false,
+        "sprout_joinsplits": 0,
+        "transparent_in": 0,
+        "transparent_out": 1,
+        "txid": "6e83397b9b7cd7807a46b503bb9a2cb542f96f98343bf4247b91596dc480b5aa",
+        "unknown_keys": []
+      },
+      "fix": "Spend only shielded notes and pay only shielded receivers (privacy policy FullPrivacy).",
+      "id": "C3",
+      "message": "transparent legs present: 0 in, 1 out",
+      "status": "fail"
+    },
+    {
+      "evidence": {
+        "block_deltas": null,
+        "expect": "any-shielded",
+        "pools_used": [
+          "ironwood"
+        ],
+        "unknown_keys": [],
+        "value_balance_zat": {
+          "ironwood": 50025000,
+          "orchard": 0,
+          "sapling": 0
+        }
+      },
+      "fix": "",
+      "id": "C4",
+      "message": "single shielded pool used: ironwood",
+      "status": "pass"
+    },
+    {
+      "evidence": {
+        "block_deltas": null,
+        "fee_zat": 25000,
+        "negative_pools": {},
+        "positive_pools": {
+          "ironwood": 50025000
+        },
+        "transparent_in_zat": 0,
+        "transparent_out_zat": 50000000,
+        "unknown_keys": [],
+        "value_balance_zat": {
+          "ironwood": 50025000,
+          "orchard": 0,
+          "sapling": 0
+        },
+        "warning": null,
+        "zip317_fee_zat": 25000
+      },
+      "fix": "Do not pay or spend transparent outputs.",
+      "id": "C4b",
+      "message": "transparent legs present: 50025000 zat left ['ironwood'], fee 25000 zat, transparent out 50000000 zat (see C3)",
+      "status": "fail"
+    },
+    {
+      "evidence": {
+        "memo_match": false,
+        "pools": [
+          "transparent"
+        ],
+        "recipient_outputs": 1
+      },
+      "fix": "Make sure the app attaches the memo and pays a shielded receiver.",
+      "id": "MEMO",
+      "message": "canary memo not found in the recipient's decrypted outputs",
+      "status": "fail"
+    },
+    {
+      "evidence": {
+        "findings_by_label": {
+          "credential:node": {
+            "count": 0,
+            "sources": []
+          },
+          "credential:zallet": {
+            "count": 0,
+            "sources": []
+          },
+          "label": {
+            "count": 0,
+            "sources": []
+          },
+          "memo": {
+            "count": 0,
+            "sources": []
+          },
+          "test_id": {
+            "count": 0,
+            "sources": []
+          }
+        },
+        "scanned_sources": [
+          "app.logs[1].stderr",
+          "app.logs[1].stdout",
+          "app.pay.stderr",
+          "app.pay.stdout",
+          "artifact:../../out/context.json",
+          "artifact:../../out/result.json",
+          "network.start.stderr",
+          "network.start.stdout",
+          "network.stop.stderr",
+          "network.stop.stdout"
+        ],
+        "total_matches": 0
+      },
+      "fix": "",
+      "id": "C6",
+      "message": "No canary markers found in 10 captured source(s).",
+      "status": "pass"
+    }
+  ],
+  "errors": {},
+  "execution_errors": [],
+  "expect": {
+    "amount": "0.5",
+    "pool": "any-shielded",
+    "privacy": "fully-shielded"
+  },
+  "network": "regtest",
+  "not_covered": [
+    "Network timing, IP/transport metadata, and observers outside the captured app outputs.",
+    "App databases, analytics, telemetry, crash dumps, or logs not explicitly configured for capture.",
+    "Mainnet/production behavior, real funds, and production credentials; this workflow is regtest-only.",
+    "Wallet/node combinations beyond those separately identified in docs/version-matrix.md.",
+    "Future transaction fields and pools are not decoded; detected unknown transaction fields make C3/C4/C4b fail closed, but those formats remain unverified.",
+    "C4b reports the transaction-derived fee and warns when it differs from conventional ZIP-317; it does not certify miner fee policy or infer hidden transparent input values.",
+    "NU7-era behavior and public testnet behavior, which are outside this phase's scope.",
+    "A complete privacy/security audit or a guarantee that no sensitive data can leak."
+  ],
+  "overall": "fail",
+  "result_error": null,
+  "seconds": 94.09,
+  "steps": {
+    "app.logs[1]": {
+      "captured_bytes": 18,
+      "exit_code": 0,
+      "seconds": 0.0,
+      "status": "ok"
+    },
+    "app.pay": {
+      "captured_bytes": 22,
+      "exit_code": 0,
+      "seconds": 12.12,
+      "status": "ok"
+    },
+    "app.start": {
+      "reason": "no command configured",
+      "status": "skipped"
+    },
+    "app.stop": {
+      "reason": "no running app to stop",
+      "status": "skipped"
+    },
+    "network.start": {
+      "captured_bytes": 2266,
+      "exit_code": 0,
+      "seconds": 61.21,
+      "status": "ok"
+    },
+    "network.stop": {
+      "captured_bytes": 1081,
+      "exit_code": 0,
+      "seconds": 20.73,
+      "status": "ok"
+    }
+  },
+  "txid": "6e83397b9b7cd7807a46b503bb9a2cb542f96f98343bf4247b91596dc480b5aa",
+  "zcanary": "0.0.1"
+}

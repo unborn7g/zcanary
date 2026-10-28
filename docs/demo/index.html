@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZCanary demo</title>
+<meta name="description" content="Real ZCanary reports for six sample Zcash apps: one clean, five broken on purpose.">
+<style>
+:root{--bg:#f6f4ee;--surface:#fff;--ink:#1c1b19;--muted:#5d5a52;--line:#ddd8cb;--accent:#1f5c4a;
+--pass:#1b6e3c;--pass-bg:#e3f3e8;--fail:#a4262c;--fail-bg:#fbe7e7;--skip:#6b665a;--skip-bg:#ebe8de;--code:#efece3}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#15150f;--surface:#1f1e17;--ink:#f1eee4;--muted:#b4afa0;--line:#38362b;--accent:#7fd1b0;
+--pass:#7fd49a;--pass-bg:#173424;--fail:#ff9a9a;--fail-bg:#3b1b1b;--skip:#b4afa0;--skip-bg:#2b2a21;--code:#2a291f}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:0 16px 64px}
+header{padding:48px 0 24px}
+h1{font-size:clamp(2rem,5vw,3rem);line-height:1.1;margin:0 0 12px;letter-spacing:-.02em}
+.lead{font-size:1.2rem;color:var(--muted);max-width:42em;margin:0 0 8px}
+.eyebrow{font-weight:600;color:var(--accent);letter-spacing:.06em;text-transform:uppercase;font-size:.8rem;margin:0 0 8px}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:24px 0;padding:0;list-style:none;counter-reset:s}
+.steps li{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;counter-increment:s}
+.steps li::before{content:counter(s);display:inline-grid;place-items:center;width:1.6em;height:1.6em;border-radius:50%;background:var(--accent);color:var(--bg);font-weight:700;font-size:.85rem;margin-right:8px}
+.strip{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0 0 28px}
+.strip b{font-size:1.1rem}.strip a{color:var(--accent)}
+h2{font-size:1.5rem;margin:40px 0 12px;letter-spacing:-.01em}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 18px 14px}
+.card h3{margin:0;font-size:1.15rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:6px}
+.badge{font-weight:700;font-size:.8rem;border-radius:999px;padding:3px 10px;white-space:nowrap}
+.badge.pass{color:var(--pass);background:var(--pass-bg)}.badge.fail{color:var(--fail);background:var(--fail-bg)}
+.story{margin:6px 0 12px;color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;padding:0;list-style:none}
+.chip{font-size:.78rem;font-weight:600;border-radius:8px;padding:3px 8px;border:1px solid transparent}
+.chip.pass{color:var(--pass);background:var(--pass-bg)}.chip.fail{color:var(--fail);background:var(--fail-bg)}.chip.not_run{color:var(--skip);background:var(--skip-bg)}
+.found{margin:0 0 10px}.found strong{display:block;font-size:.8rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.ok{font-size:.9rem;color:var(--pass);margin:0 0 8px}
+details{border-top:1px solid var(--line);padding-top:8px;margin-top:6px}
+summary{cursor:pointer;color:var(--muted);font-size:.9rem}
+.raw{margin:8px 0 0;padding:0;list-style:none;font-size:.85rem}
+.raw li{padding:4px 0;border-bottom:1px dashed var(--line)}
+.raw code{background:var(--code);padding:1px 6px;border-radius:6px;font-size:.8rem}
+dl.meaning{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}
+dl.meaning dt{font-weight:600}dl.meaning dd{margin:0;color:var(--muted)}
+@media (max-width:560px){dl.meaning{grid-template-columns:1fr}dl.meaning dt{margin-top:8px}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px}
+.panel ul{margin:8px 0 0;padding-left:1.2em}.panel li{margin:4px 0}
+footer{margin-top:40px;color:var(--muted);font-size:.9rem}footer a,.panel a{color:var(--accent)}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <p class="eyebrow">ZCanary &middot; privacy smoke test for Zcash apps</p>
+  <h1>Your app says &ldquo;private payment.&rdquo; Did it really do that?</h1>
+  <p class="lead">ZCanary checks the receipt, not the sign. It builds a throwaway Zcash network, makes your app pay with a secret marker attached, and inspects what actually happened.</p>
+  <ol class="steps">
+    <li><b>Start</b> a practice network on your machine. No real money, seeds or keys.</li>
+    <li><b>Pay</b> through your app, with a secret marker in the payment.</li>
+    <li><b>Inspect</b> the real transaction, the receiving wallet and your app's logs.</li>
+    <li><b>Report</b> what passed, what failed, and what was never tested.</li>
+  </ol>
+  <div class="strip">
+    <span><b>6</b> sample apps</span>
+    <span><b>1</b> clean, <b>5</b> caught</span>
+    <span>Real results from the <a href="https://github.com/unborn7g/zcanary/actions">CI run (commit e4f6347)</a></span>
+  </div>
+</header>
+
+<h2>Six apps, six verdicts</h2>
+<p class="lead" style="font-size:1rem">One app is correct. Five are broken on purpose, each in one specific way. ZCanary has to fail exactly the right checks for each one, and the project&rsquo;s test suite requires it.</p>
+<div class="grid">
+<article class="card" id="clean-shop">
+  <div class="top"><h3>clean-shop</h3><span class="badge pass">PASS</span></div>
+  <p class="story">A shop that does everything right: pays the private side of the address, attaches the note, and keeps its logs clean.</p>
+  <ul class="chips" aria-label="Check results"><li class="chip pass">C1 Network: PASS</li><li class="chip pass">C2 Address: PASS</li><li class="chip pass">C3 Public legs: PASS</li><li class="chip pass">C4 Pools: PASS</li><li class="chip pass">C4b Pool moves: PASS</li><li class="chip pass">MEMO Memo: PASS</li><li class="chip pass">C6 Logs: PASS</li></ul>
+  <p class="found"><strong>What ZCanary found</strong>All seven checks pass. The money moved through one shielded pool, the transaction has no public legs, the recipient could read the memo, and none of our secret markers appeared in the logs.</p>
+  <p class="ok">&#10003; Designed to pass everything. It did.</p>
+  <details><summary>Exact report lines</summary><ul class="raw"><li><code>C1</code> node chain &#x27;test&#x27;, node/app genesis hashes, app network, recipient prefix, and config all agree on regtest</li><li><code>C2</code> unified address receivers: [&#x27;orchard&#x27;, &#x27;sapling&#x27;]</li><li><code>C3</code> no transparent inputs or outputs</li><li><code>C4</code> single shielded pool used: ironwood</li><li><code>C4b</code> no negative shielded valueBalances; value left at most one pool ([&#x27;ironwood&#x27;]); no transparent legs; derived fee 25000 zat</li><li><code>MEMO</code> recipient wallet decrypted the canary memo</li><li><code>C6</code> No canary markers found in 10 captured source(s).</li></ul>
+  <p class="story">Report files: <a href="reports/clean-shop.md">Markdown</a>, <a href="reports/clean-shop.json">JSON</a>.</p></details>
+</article>
+<article class="card" id="transparent-fallback">
+  <div class="top"><h3>transparent-fallback</h3><span class="badge fail">CAUGHT</span></div>
+  <p class="story">The address has a public door and a private one. This app walks through the public one.</p>
+  <ul class="chips" aria-label="Check results"><li class="chip pass">C1 Network: PASS</li><li class="chip fail">C2 Address: FAIL</li><li class="chip fail">C3 Public legs: FAIL</li><li class="chip pass">C4 Pools: PASS</li><li class="chip fail">C4b Pool moves: FAIL</li><li class="chip fail">MEMO Memo: FAIL</li><li class="chip pass">C6 Logs: PASS</li></ul>
+  <p class="found"><strong>What ZCanary found</strong>ZCanary decoded the real transaction and found a public output of 0.5 test ZEC. Anyone can see that payment. The memo never reached the recipient, because a public output cannot carry one.</p>
+  <p class="ok">&#10003; Designed to fail: C2, C3, C4b, MEMO. ZCanary failed exactly these.</p>
+  <details><summary>Exact report lines</summary><ul class="raw"><li><code>C1</code> node chain &#x27;test&#x27;, node/app genesis hashes, app network, recipient prefix, and config all agree on regtest</li><li><code>C2</code> address-policy failure: unified address offers transparent receiver(s): [&#x27;p2pkh&#x27;]; this does not prove the payment used one (see C3 transaction legs)</li><li><code>C3</code> transparent legs present: 0 in, 1 out</li><li><code>C4</code> single shielded pool used: ironwood</li><li><code>C4b</code> transparent legs present: 50025000 zat left [&#x27;ironwood&#x27;], fee 25000 zat, transparent out 50000000 zat (see C3)</li><li><code>MEMO</code> canary memo not found in the recipient&#x27;s decrypted outputs</li><li><code>C6</code> No canary markers found in 10 captured source(s).</li></ul>
+  <p class="story">Report files: <a href="reports/transparent-fallback.md">Markdown</a>, <a href="reports/transparent-fallback.json">JSON</a>.</p></details>
+</article>
+<article class="card" id="wrong-network">
+  <div class="top"><h3>wrong-network</h3><span class="badge fail">CAUGHT</span></div>
+  <p class="story">The test expects the practice network. The app is quietly pointed at another one.</p>
+  <ul class="chips" aria-label="Check results"><li class="chip fail">C1 Network: FAIL</li><li class="chip pass">C2 Address: PASS</li><li class="chip not_run">C3 Public legs: NOT RUN</li><li class="chip not_run">C4 Pools: NOT RUN</li><li class="chip not_run">C4b Pool moves: NOT RUN</li><li class="chip not_run">MEMO Memo: NOT RUN</li><li class="chip pass">C6 Logs: PASS</li></ul>
+  <p class="found"><strong>What ZCanary found</strong>The app reported testnet while the test expected regtest, and its wallet&#x27;s genesis hash was the testnet one. The transaction checks did not run, because they would be judging the wrong network.</p>
+  <p class="ok">&#10003; Designed to fail: C1. ZCanary failed exactly these.</p>
+  <details><summary>Exact report lines</summary><ul class="raw"><li><code>C1</code> app reports network &#x27;testnet&#x27;, config says &#x27;regtest&#x27;; app wallet endpoint genesis hash is the testnet genesis, config says &#x27;regtest&#x27;; app wallet endpoint genesis hash does not match the node genesis hash</li><li><code>C2</code> unified address receivers: [&#x27;orchard&#x27;, &#x27;sapling&#x27;]</li><li><code>C3</code> not run: no decoded transaction</li><li><code>C4</code> not run: no decoded transaction</li><li><code>C4b</code> not run: no decoded transaction</li><li><code>MEMO</code> not run: need z_viewtransaction result and the canary string</li><li><code>C6</code> No canary markers found in 10 captured source(s).</li></ul>
+  <p class="story">Report files: <a href="reports/wrong-network.md">Markdown</a>, <a href="reports/wrong-network.json">JSON</a>.</p></details>
+</article>
+<article class="card" id="log-leaker">
+  <div class="top"><h3>log-leaker</h3><span class="badge fail">CAUGHT</span></div>
+  <p class="story">The payment itself is private. But the app writes the payment&#x27;s details into its own log file.</p>
+  <ul class="chips" aria-label="Check results"><li class="chip pass">C1 Network: PASS</li><li class="chip pass">C2 Address: PASS</li><li class="chip pass">C3 Public legs: PASS</li><li class="chip pass">C4 Pools: PASS</li><li class="chip pass">C4b Pool moves: PASS</li><li class="chip pass">MEMO Memo: PASS</li><li class="chip fail">C6 Logs: FAIL</li></ul>
+  <p class="found"><strong>What ZCanary found</strong>Every on-chain check passes, yet ZCanary found all three secret markers (memo, label and test id) in what the app logged. The report names which markers leaked, and never prints their values.</p>
+  <p class="ok">&#10003; Designed to fail: C6. ZCanary failed exactly these.</p>
+  <details><summary>Exact report lines</summary><ul class="raw"><li><code>C1</code> node chain &#x27;test&#x27;, node/app genesis hashes, app network, recipient prefix, and config all agree on regtest</li><li><code>C2</code> unified address receivers: [&#x27;orchard&#x27;, &#x27;sapling&#x27;]</li><li><code>C3</code> no transparent inputs or outputs</li><li><code>C4</code> single shielded pool used: ironwood</li><li><code>C4b</code> no negative shielded valueBalances; value left at most one pool ([&#x27;ironwood&#x27;]); no transparent legs; derived fee 25000 zat</li><li><code>MEMO</code> recipient wallet decrypted the canary memo</li><li><code>C6</code> Canary or configured sensitive marker(s) were found in captured output: label, memo, test_id.</li></ul>
+  <p class="story">Report files: <a href="reports/log-leaker.md">Markdown</a>, <a href="reports/log-leaker.json">JSON</a>.</p></details>
+</article>
+<article class="card" id="memo-dropper">
+  <div class="top"><h3>memo-dropper</h3><span class="badge fail">CAUGHT</span></div>
+  <p class="story">A private payment that loses the note: the customer pays, but the memo never arrives.</p>
+  <ul class="chips" aria-label="Check results"><li class="chip pass">C1 Network: PASS</li><li class="chip pass">C2 Address: PASS</li><li class="chip pass">C3 Public legs: PASS</li><li class="chip pass">C4 Pools: PASS</li><li class="chip pass">C4b Pool moves: PASS</li><li class="chip fail">MEMO Memo: FAIL</li><li class="chip pass">C6 Logs: PASS</li></ul>
+  <p class="found"><strong>What ZCanary found</strong>The transaction is fully shielded, but the recipient&#x27;s wallet could not find the memo in what it decrypted.</p>
+  <p class="ok">&#10003; Designed to fail: MEMO. ZCanary failed exactly these.</p>
+  <details><summary>Exact report lines</summary><ul class="raw"><li><code>C1</code> node chain &#x27;test&#x27;, node/app genesis hashes, app network, recipient prefix, and config all agree on regtest</li><li><code>C2</code> unified address receivers: [&#x27;orchard&#x27;, &#x27;sapling&#x27;]</li><li><code>C3</code> no transparent inputs or outputs</li><li><code>C4</code> single shielded pool used: ironwood</li><li><code>C4b</code> no negative shielded valueBalances; value left at most one pool ([&#x27;ironwood&#x27;]); no transparent legs; derived fee 25000 zat</li><li><code>MEMO</code> canary memo not found in the recipient&#x27;s decrypted outputs</li><li><code>C6</code> No canary markers found in 10 captured source(s).</li></ul>
+  <p class="story">Report files: <a href="reports/memo-dropper.md">Markdown</a>, <a href="reports/memo-dropper.json">JSON</a>.</p></details>
+</article>
+<article class="card" id="cross-pool-payer">
+  <div class="top"><h3>cross-pool-payer</h3><span class="badge fail">CAUGHT</span></div>
+  <p class="story">Moves money from one shielded pool into another. Both are private, but the crossing makes the amount public.</p>
+  <ul class="chips" aria-label="Check results"><li class="chip pass">C1 Network: PASS</li><li class="chip pass">C2 Address: PASS</li><li class="chip pass">C3 Public legs: PASS</li><li class="chip fail">C4 Pools: FAIL</li><li class="chip fail">C4b Pool moves: FAIL</li><li class="chip pass">MEMO Memo: PASS</li><li class="chip pass">C6 Logs: PASS</li></ul>
+  <p class="found"><strong>What ZCanary found</strong>0.5 test ZEC left one shielded pool and entered another, so the amount is visible on-chain. This is the same kind of crossing ZCanary found Zallet v0.1.0-beta.1 allowing under the FullPrivacy setting.</p>
+  <p class="ok">&#10003; Designed to fail: C4, C4b. ZCanary failed exactly these.</p>
+  <details><summary>Exact report lines</summary><ul class="raw"><li><code>C1</code> node chain &#x27;test&#x27;, node/app genesis hashes, app network, recipient prefix, and config all agree on regtest</li><li><code>C2</code> unified address receivers: [&#x27;orchard&#x27;, &#x27;sapling&#x27;]</li><li><code>C3</code> no transparent inputs or outputs</li><li><code>C4</code> multiple shielded pools used: [&#x27;sapling&#x27;, &#x27;ironwood&#x27;]</li><li><code>C4b</code> negative shielded valueBalance {&#x27;sapling&#x27;: -50000000}: 50000000 zat entered [&#x27;sapling&#x27;] from positive source pool(s) [&#x27;ironwood&#x27;]; amount is public</li><li><code>MEMO</code> recipient wallet decrypted the canary memo</li><li><code>C6</code> No canary markers found in 10 captured source(s).</li></ul>
+  <p class="story">Report files: <a href="reports/cross-pool-payer.md">Markdown</a>, <a href="reports/cross-pool-payer.json">JSON</a>.</p></details>
+</article>
+</div>
+
+<h2>What the checks mean</h2>
+<div class="panel"><dl class="meaning"><dt>C1 Network</dt><dd>Is everyone talking about the same network, or is the app quietly pointed somewhere else?</dd><dt>C2 Address</dt><dd>Does the address you pay offer a public (transparent) door as well as private ones?</dd><dt>C3 Public legs</dt><dd>Does the real transaction have any public inputs or outputs?</dd><dt>C4 / C4b Pools</dt><dd>Which shielded pools did the money use, and did value cross between them where the amount becomes visible?</dd><dt>MEMO Memo</dt><dd>Could the receiving wallet actually read the secret note we attached?</dd><dt>C6 Logs</dt><dd>Did our secret markers show up anywhere in the logs or files the app wrote?</dd></dl></div>
+
+<h2>A real find</h2>
+<div class="panel">
+  <p>While building ZCanary, the pool check caught something real. Zallet <code>v0.1.0-beta.1</code> let a payment sent with the <code>FullPrivacy</code> setting move value from one shielded pool into another, which made the amount publicly visible. It reproduced on three separate test chains. The source and release notes suggest <code>v0.1.0-beta.3</code> fixes it, but that was not run here.</p>
+  <p><a href="https://github.com/unborn7g/zcanary/blob/main/docs/finding-fullprivacy.md">Read the evidence and caveats</a></p>
+</div>
+
+<h2>What ZCanary does not test</h2>
+<div class="panel">
+  <p>A green report is a smoke test, not an audit. Every report ends with this list.</p>
+  <ul><li>Network timing, IP/transport metadata, and observers outside the captured app outputs.</li><li>App databases, analytics, telemetry, crash dumps, or logs not explicitly configured for capture.</li><li>Mainnet/production behavior, real funds, and production credentials; this workflow is regtest-only.</li><li>Wallet/node combinations beyond those separately identified in docs/version-matrix.md.</li><li>Future transaction fields and pools are not decoded; detected unknown transaction fields make C3/C4/C4b fail closed, but those formats remain unverified.</li><li>C4b reports the transaction-derived fee and warns when it differs from conventional ZIP-317; it does not certify miner fee policy or infer hidden transparent input values.</li><li>NU7-era behavior and public testnet behavior, which are outside this phase&#x27;s scope.</li><li>A complete privacy/security audit or a guarantee that no sensitive data can leak.</li></ul>
+</div>
+
+<footer>
+  <p>Open source under the MIT license. <a href="https://github.com/unborn7g/zcanary">Source code and README</a>. Regtest only: nothing here touches mainnet, public testnet, real keys or real funds.</p>
+  <p>This page was generated by <code>scripts/build_demo_page.py</code> from the sanitized reports in <code>docs/demo/reports/</code>.</p>
+</footer>
+</div>
+</body>
+</html>

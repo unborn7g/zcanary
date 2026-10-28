@@ -1,0 +1,169 @@
+{
+  "canary_scan_scope": "captured app command output, configured app logs, configured scan files, and generated reports only",
+  "checks": [
+    {
+      "evidence": {
+        "app_genesis_hash": "05a60a92d99d85997cce3b87616c089f6124d7342af37106edc76126334a2c38",
+        "app_genesis_network": "testnet",
+        "app_network": "testnet",
+        "config": "regtest",
+        "genesis_hash": "029f11d80ef9765602235e1bc9727e3eb6ba20839319f761fee920d63401e327",
+        "genesis_network": "regtest",
+        "node_chain": "test",
+        "node_implies": [
+          "regtest",
+          "testnet"
+        ],
+        "recipient": "uregtest1pue\u2026er8kzp",
+        "recipient_kind": "unified",
+        "recipient_network": "regtest"
+      },
+      "fix": "Point the app at the node for the configured network and use a recipient address for it.",
+      "id": "C1",
+      "message": "app reports network 'testnet', config says 'regtest'; app wallet endpoint genesis hash is the testnet genesis, config says 'regtest'; app wallet endpoint genesis hash does not match the node genesis hash",
+      "status": "fail"
+    },
+    {
+      "evidence": {
+        "kind": "unified",
+        "receivers": [
+          "orchard",
+          "sapling"
+        ],
+        "recipient": "uregtest1pue\u2026er8kzp"
+      },
+      "fix": "",
+      "id": "C2",
+      "message": "unified address receivers: ['orchard', 'sapling']",
+      "status": "pass"
+    },
+    {
+      "evidence": {},
+      "fix": "Provide the missing input and rerun.",
+      "id": "C3",
+      "message": "not run: no decoded transaction",
+      "status": "not_run"
+    },
+    {
+      "evidence": {},
+      "fix": "Provide the missing input and rerun.",
+      "id": "C4",
+      "message": "not run: no decoded transaction",
+      "status": "not_run"
+    },
+    {
+      "evidence": {},
+      "fix": "Provide the missing input and rerun.",
+      "id": "C4b",
+      "message": "not run: no decoded transaction",
+      "status": "not_run"
+    },
+    {
+      "evidence": {},
+      "fix": "Provide the missing input and rerun.",
+      "id": "MEMO",
+      "message": "not run: need z_viewtransaction result and the canary string",
+      "status": "not_run"
+    },
+    {
+      "evidence": {
+        "findings_by_label": {
+          "credential:node": {
+            "count": 0,
+            "sources": []
+          },
+          "credential:zallet": {
+            "count": 0,
+            "sources": []
+          },
+          "label": {
+            "count": 0,
+            "sources": []
+          },
+          "memo": {
+            "count": 0,
+            "sources": []
+          },
+          "test_id": {
+            "count": 0,
+            "sources": []
+          }
+        },
+        "scanned_sources": [
+          "app.logs[1].stderr",
+          "app.logs[1].stdout",
+          "app.pay.stderr",
+          "app.pay.stdout",
+          "artifact:../../out/context.json",
+          "artifact:../../out/result.json",
+          "network.start.stderr",
+          "network.start.stdout",
+          "network.stop.stderr",
+          "network.stop.stdout"
+        ],
+        "total_matches": 0
+      },
+      "fix": "",
+      "id": "C6",
+      "message": "No canary markers found in 10 captured source(s).",
+      "status": "pass"
+    }
+  ],
+  "errors": {},
+  "execution_errors": [],
+  "expect": {
+    "amount": "0.5",
+    "pool": "any-shielded",
+    "privacy": "fully-shielded"
+  },
+  "network": "regtest",
+  "not_covered": [
+    "Network timing, IP/transport metadata, and observers outside the captured app outputs.",
+    "App databases, analytics, telemetry, crash dumps, or logs not explicitly configured for capture.",
+    "Mainnet/production behavior, real funds, and production credentials; this workflow is regtest-only.",
+    "Wallet/node combinations beyond those separately identified in docs/version-matrix.md.",
+    "Future transaction fields and pools are not decoded; detected unknown transaction fields make C3/C4/C4b fail closed, but those formats remain unverified.",
+    "C4b reports the transaction-derived fee and warns when it differs from conventional ZIP-317; it does not certify miner fee policy or infer hidden transparent input values.",
+    "NU7-era behavior and public testnet behavior, which are outside this phase's scope.",
+    "A complete privacy/security audit or a guarantee that no sensitive data can leak."
+  ],
+  "overall": "fail",
+  "result_error": null,
+  "seconds": 82.09,
+  "steps": {
+    "app.logs[1]": {
+      "captured_bytes": 39,
+      "exit_code": 0,
+      "seconds": 0.0,
+      "status": "ok"
+    },
+    "app.pay": {
+      "captured_bytes": 22,
+      "exit_code": 0,
+      "seconds": 0.05,
+      "status": "ok"
+    },
+    "app.start": {
+      "reason": "no command configured",
+      "status": "skipped"
+    },
+    "app.stop": {
+      "reason": "no running app to stop",
+      "status": "skipped"
+    },
+    "network.start": {
+      "captured_bytes": 2266,
+      "exit_code": 0,
+      "seconds": 61.41,
+      "status": "ok"
+    },
+    "network.stop": {
+      "captured_bytes": 1081,
+      "exit_code": 0,
+      "seconds": 20.62,
+      "status": "ok"
+    }
+  },
+  "txid": null,
+  "zcanary": "0.0.1"
+}

@@ -1,0 +1,217 @@
+{
+  "canary_scan_scope": "captured app command output, configured app logs, configured scan files, and generated reports only",
+  "checks": [
+    {
+      "evidence": {
+        "app_genesis_hash": "029f11d80ef9765602235e1bc9727e3eb6ba20839319f761fee920d63401e327",
+        "app_genesis_network": "regtest",
+        "app_network": "regtest",
+        "config": "regtest",
+        "genesis_hash": "029f11d80ef9765602235e1bc9727e3eb6ba20839319f761fee920d63401e327",
+        "genesis_network": "regtest",
+        "node_chain": "test",
+        "node_implies": [
+          "regtest",
+          "testnet"
+        ],
+        "recipient": "uregtest1up3\u2026v68y9d",
+        "recipient_kind": "unified",
+        "recipient_network": "regtest"
+      },
+      "fix": "",
+      "id": "C1",
+      "message": "node chain 'test', node/app genesis hashes, app network, recipient prefix, and config all agree on regtest",
+      "status": "pass"
+    },
+    {
+      "evidence": {
+        "kind": "unified",
+        "receivers": [
+          "orchard",
+          "sapling"
+        ],
+        "recipient": "uregtest1up3\u2026v68y9d"
+      },
+      "fix": "",
+      "id": "C2",
+      "message": "unified address receivers: ['orchard', 'sapling']",
+      "status": "pass"
+    },
+    {
+      "evidence": {
+        "coinbase": false,
+        "sprout_joinsplits": 0,
+        "transparent_in": 0,
+        "transparent_out": 0,
+        "txid": "df911b0f55a8502b71524aaf9327fe56fffe24b00be5a562d53d2d5109512040",
+        "unknown_keys": []
+      },
+      "fix": "",
+      "id": "C3",
+      "message": "no transparent inputs or outputs",
+      "status": "pass"
+    },
+    {
+      "evidence": {
+        "block_deltas": null,
+        "expect": "any-shielded",
+        "pools_used": [
+          "ironwood"
+        ],
+        "unknown_keys": [],
+        "value_balance_zat": {
+          "ironwood": 25000,
+          "orchard": 0,
+          "sapling": 0
+        }
+      },
+      "fix": "",
+      "id": "C4",
+      "message": "single shielded pool used: ironwood",
+      "status": "pass"
+    },
+    {
+      "evidence": {
+        "block_deltas": null,
+        "fee_zat": 25000,
+        "negative_pools": {},
+        "positive_pools": {
+          "ironwood": 25000
+        },
+        "transparent_in_zat": 0,
+        "transparent_out_zat": 0,
+        "unknown_keys": [],
+        "value_balance_zat": {
+          "ironwood": 25000,
+          "orchard": 0,
+          "sapling": 0
+        },
+        "warning": null,
+        "zip317_fee_zat": 25000
+      },
+      "fix": "",
+      "id": "C4b",
+      "message": "no negative shielded valueBalances; value left at most one pool (['ironwood']); no transparent legs; derived fee 25000 zat",
+      "status": "pass"
+    },
+    {
+      "evidence": {
+        "memo_match": true,
+        "pools": [
+          "ironwood"
+        ],
+        "recipient_outputs": 1
+      },
+      "fix": "",
+      "id": "MEMO",
+      "message": "recipient wallet decrypted the canary memo",
+      "status": "pass"
+    },
+    {
+      "evidence": {
+        "findings_by_label": {
+          "credential:node": {
+            "count": 0,
+            "sources": []
+          },
+          "credential:zallet": {
+            "count": 0,
+            "sources": []
+          },
+          "label": {
+            "count": 1,
+            "sources": [
+              "app.logs[1].stdout"
+            ]
+          },
+          "memo": {
+            "count": 1,
+            "sources": [
+              "app.logs[1].stdout"
+            ]
+          },
+          "test_id": {
+            "count": 1,
+            "sources": [
+              "app.logs[1].stdout"
+            ]
+          }
+        },
+        "scanned_sources": [
+          "app.logs[1].stderr",
+          "app.logs[1].stdout",
+          "app.pay.stderr",
+          "app.pay.stdout",
+          "artifact:../../out/context.json",
+          "artifact:../../out/result.json",
+          "network.start.stderr",
+          "network.start.stdout",
+          "network.stop.stderr",
+          "network.stop.stdout"
+        ],
+        "total_matches": 3
+      },
+      "fix": "Remove the leaking log/output path and rerun; inspect the source locally without sharing marker values.",
+      "id": "C6",
+      "message": "Canary or configured sensitive marker(s) were found in captured output: label, memo, test_id.",
+      "status": "fail"
+    }
+  ],
+  "errors": {},
+  "execution_errors": [],
+  "expect": {
+    "amount": "0.5",
+    "pool": "any-shielded",
+    "privacy": "fully-shielded"
+  },
+  "network": "regtest",
+  "not_covered": [
+    "Network timing, IP/transport metadata, and observers outside the captured app outputs.",
+    "App databases, analytics, telemetry, crash dumps, or logs not explicitly configured for capture.",
+    "Mainnet/production behavior, real funds, and production credentials; this workflow is regtest-only.",
+    "Wallet/node combinations beyond those separately identified in docs/version-matrix.md.",
+    "Future transaction fields and pools are not decoded; detected unknown transaction fields make C3/C4/C4b fail closed, but those formats remain unverified.",
+    "C4b reports the transaction-derived fee and warns when it differs from conventional ZIP-317; it does not certify miner fee policy or infer hidden transparent input values.",
+    "NU7-era behavior and public testnet behavior, which are outside this phase's scope.",
+    "A complete privacy/security audit or a guarantee that no sensitive data can leak."
+  ],
+  "overall": "fail",
+  "result_error": null,
+  "seconds": 95.78,
+  "steps": {
+    "app.logs[1]": {
+      "captured_bytes": 109,
+      "exit_code": 0,
+      "seconds": 0.0,
+      "status": "ok"
+    },
+    "app.pay": {
+      "captured_bytes": 22,
+      "exit_code": 0,
+      "seconds": 14.14,
+      "status": "ok"
+    },
+    "app.start": {
+      "reason": "no command configured",
+      "status": "skipped"
+    },
+    "app.stop": {
+      "reason": "no running app to stop",
+      "status": "skipped"
+    },
+    "network.start": {
+      "captured_bytes": 2266,
+      "exit_code": 0,
+      "seconds": 60.81,
+      "status": "ok"
+    },
+    "network.stop": {
+      "captured_bytes": 1081,
+      "exit_code": 0,
+      "seconds": 20.8,
+      "status": "ok"
+    }
+  },
+  "txid": "df911b0f55a8502b71524aaf9327fe56fffe24b00be5a562d53d2d5109512040",
+  "zcanary": "0.0.1"
+}
